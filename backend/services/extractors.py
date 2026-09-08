@@ -8,9 +8,15 @@
 # ==============================================================================
 
 import os
+import shutil
 
-TESSERACT_PATH = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+TESSERACT_PATH_WIN = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 TESSDATA_DIR = os.path.join(os.path.dirname(__file__), "..", "tessdata")
+
+
+def _resolve_tesseract_cmd() -> str | None:
+    """หา binary ของ Tesseract ข้ามแพลตฟอร์ม: env > PATH > Windows default"""
+    return os.getenv("TESSERACT_CMD") or shutil.which("tesseract") or TESSERACT_PATH_WIN
 
 MIN_TEXT_LENGTH = 20
 OCR_MAX_PAGES = 40  # จำกัดจำนวนหน้า OCR กัน request ยาวเกินไป
@@ -38,7 +44,8 @@ def _ocr_pdf(file_path: str) -> str:
 
     import fitz
 
-    if not os.path.exists(TESSERACT_PATH):
+    cmd = _resolve_tesseract_cmd()
+    if not cmd or not os.path.exists(cmd):
         raise ExtractionError(
             "ไฟล์ PDF นี้เป็นภาพสแกน (ไม่มีข้อความฝัง) และยังไม่ได้ติดตั้ง Tesseract OCR"
         )
@@ -46,9 +53,12 @@ def _ocr_pdf(file_path: str) -> str:
     import pytesseract
     from PIL import Image
 
-    pytesseract.pytesseract.tesseract_cmd = TESSERACT_PATH
-    # ชี้ tessdata ของโปรเจกต์ (มี tha+eng) — tesseract subprocess จะ inherit ค่านี้
-    os.environ["TESSDATA_PREFIX"] = os.path.abspath(TESSDATA_DIR)
+    pytesseract.pytesseract.tesseract_cmd = cmd
+    # ใช้ tessdata ที่มากับโปรเจกต์ถ้ามี (local dev) — ไม่งั้นปล่อยให้ใช้ของระบบ (Docker)
+    if "TESSDATA_PREFIX" not in os.environ:
+        bundled = os.path.abspath(TESSDATA_DIR)
+        if os.path.exists(os.path.join(bundled, "tha.traineddata")):
+            os.environ["TESSDATA_PREFIX"] = bundled
 
     parts: list[str] = []
     with fitz.open(file_path) as doc:
