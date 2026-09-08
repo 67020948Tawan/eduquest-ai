@@ -1,0 +1,192 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+/* ---- EduQuest game animations ---- */
+@keyframes eq-shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-6px) rotate(-2deg); }
+  40% { transform: translateX(5px) rotate(2deg); }
+  60% { transform: translateX(-4px); }
+  80% { transform: translateX(3px); }
+}
+.eq-shake { animation: eq-shake 0.35s ease; }
+
+@keyframes eq-float-up {
+  0% { opacity: 1; transform: translateY(0) scale(1.2); }
+  100% { opacity: 0; transform: translateY(-38px) scale(1); }
+}
+.eq-float { animation: eq-float-up 0.9s ease-out forwards; }
+
+@keyframes eq-pop-in {
+  0% { transform: scale(0.6); opacity: 0; }
+  70% { transform: scale(1.08); }
+  100% { transform: scale(1); opacity: 1; }
+}
+.eq-pop { animation: eq-pop-in 0.25s ease-out; }
+
+@keyframes eq-defeat {
+  0% { transform: scale(1); filter: brightness(1); }
+  50% { transform: scale(1.15) rotate(8deg); filter: brightness(2.5) saturate(0); }
+  100% { transform: scale(0) rotate(30deg); filter: brightness(3) saturate(0); opacity: 0; }
+}
+.eq-defeat { animation: eq-defeat 0.7s ease-in forwards; }
+
+/* ตัวละครลอยขึ้นลงเบาๆ — เหมือนหายใจ/มีชีวิต */
+@keyframes eq-float-idle {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-7px); }
+}
+.eq-float-idle { animation: eq-float-idle 2.6s ease-in-out infinite; }
+
+/* Hero พุ่งไปโจมตี (ไปทางขวา) */
+@keyframes eq-lunge-right {
+  0% { transform: translateX(0) scale(1); }
+  30% { transform: translateX(-8px) scaleX(0.95); }
+  55% { transform: translateX(46px) scale(1.08); }
+  75% { transform: translateX(38px); }
+  100% { transform: translateX(0); }
+}
+.eq-lunge-right { animation: eq-lunge-right 0.55s cubic-bezier(0.22, 1, 0.36, 1); z-index: 10; position: relative; }
+
+/* Enemy พุ่งมาโจมตี (ไปทางซ้าย) */
+@keyframes eq-lunge-left {
+  0% { transform: translateX(0) scale(1); }
+  30% { transform: translateX(8px) scaleX(0.95); }
+  55% { transform: translateX(-46px) scale(1.08) rotate(-6deg); }
+  75% { transform: translateX(-36px); }
+  100% { transform: translateX(0); }
+}
+.eq-lunge-left { animation: eq-lunge-left 0.55s cubic-bezier(0.22, 1, 0.36, 1); z-index: 10; position: relative; }
+
+/* แฟลชขาวตอนโดนตี */
+@keyframes eq-hit-flash {
+  0%, 100% { opacity: 0; }
+  40% { opacity: 1; }
+}
+.eq-hit-flash { animation: eq-hit-flash 0.3s ease-out; border-radius: 9999px; }
+
+/* Progress bar shimmer */
+@keyframes eq-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.eq-progress-shimmer {
+  background-image: linear-gradient(
+    110deg,
+    rgba(255,255,255,0) 33%,
+    rgba(255,255,255,0.35) 50%,
+    rgba(255,255,255,0) 66%
+  );
+  background-size: 200% 100%;
+  animation: eq-shimmer 2.2s linear infinite;
+}
+
+/* Damage number pop (ใหญ่ + มี outline) */
+.eq-dmg {
+  font-weight: 900;
+  text-shadow:
+    -2px -2px 0 #000,
+    2px -2px 0 #000,
+    -2px 2px 0 #000,
+    2px 2px 0 #000;
+}
+
+/* ---- Landing page motion ---- */
+@keyframes eq-gradient-move {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
+}
+.eq-gradient-text {
+  background: linear-gradient(90deg, #818cf8, #e879f9, #fbbf24, #818cf8);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: eq-gradient-move 5s linear infinite;
+}
+
+@keyframes eq-blob {
+  0%, 100% { transform: translate(0, 0) scale(1); opacity: 0.5; }
+  33% { transform: translate(30px, -40px) scale(1.15); opacity: 0.7; }
+  66% { transform: translate(-25px, 20px) scale(0.9); opacity: 0.45; }
+}
+.eq-blob { animation: eq-blob 14s ease-in-out infinite; filter: blur(70px); }
+.eq-blob-delay { animation-delay: -7s; }
+
+/* Scroll reveal */
+.eq-reveal {
+  opacity: 0;
+  transform: translateY(28px);
+  transition: opacity 0.7s ease, transform 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.eq-reveal.in {
+  opacity: 1;
+  transform: none;
+}
+
+/* CTA glow pulse */
+@keyframes eq-glow {
+  0%, 100% { box-shadow: 0 0 24px rgba(129, 140, 248, 0.35), 0 8px 30px rgba(99, 102, 241, 0.25); }
+  50% { box-shadow: 0 0 44px rgba(167, 139, 250, 0.55), 0 10px 40px rgba(139, 92, 246, 0.4); }
+}
+.eq-glow { animation: eq-glow 3s ease-in-out infinite; }
+
+/* Floating dust particles */
+@keyframes eq-drift {
+  0% { transform: translateY(0) translateX(0); opacity: 0; }
+  10% { opacity: var(--po, 0.6); }
+  90% { opacity: var(--po, 0.6); }
+  100% { transform: translateY(-110vh) translateX(var(--px, 20px)); opacity: 0; }
+}
+.eq-mote {
+  position: absolute;
+  border-radius: 9999px;
+  background: #a5b4fc;
+  animation: eq-drift linear infinite;
+  pointer-events: none;
+}
+
+/* Reduced motion — ปิดทั้งระบบ */
+@media (prefers-reduced-motion: reduce) {
+  .eq-float-idle,
+  .eq-float,
+  .eq-pop,
+  .eq-shake,
+  .eq-glow,
+  .eq-blob,
+  .eq-mote,
+  .eq-gradient-text,
+  .eq-progress-shimmer,
+  .eq-defeat,
+  .eq-hit-flash,
+  .eq-lunge-left,
+  .eq-lunge-right {
+    animation: none !important;
+    transform: none !important;
+  }
+  .eq-reveal { opacity: 1 !important; transform: none !important; transition: none !important; }
+}

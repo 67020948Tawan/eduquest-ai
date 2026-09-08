@@ -1,0 +1,733 @@
+// ==============================================================================
+// lib/api.ts — EduQuest AI API Client (single source of truth)
+// ==============================================================================
+
+import { notifyAuthChanged } from "./useAuthToken";
+
+export const API_BASE_URL =
+  process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+
+const TOKEN_KEY = "eduquest_token";
+const USER_KEY = "eduquest_user";
+
+// ------------------------------------------------------------------------------
+// Auth helpers
+// ------------------------------------------------------------------------------
+
+export function getToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+export function setToken(token: string) {
+  localStorage.setItem(TOKEN_KEY, token);
+  notifyAuthChanged();
+}
+
+export function clearToken() {
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(USER_KEY);
+  notifyAuthChanged();
+}
+
+export interface CurrentUser {
+  id: number;
+  name: string;
+  email: string;
+  role: string;
+}
+
+export function getCachedUser(): CurrentUser | null {
+  if (typeof window === "undefined") return null;
+  const raw = localStorage.getItem(USER_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as CurrentUser;
+  } catch {
+    return null;
+  }
+}
+
+function cacheUser(user: CurrentUser) {
+  localStorage.setItem(USER_KEY, JSON.stringify(user));
+}
+
+async function request<T>(
+  path: string,
+  options: RequestInit & { auth?: boolean } = {}
+): Promise<T> {
+  const { auth = true, headers, ...rest } = options;
+
+  const finalHeaders: Record<string, string> = {};
+  const srcHeaders = new Headers(headers || {});
+  srcHeaders.forEach((v, k) => {
+    finalHeaders[k] = v;
+  });
+
+  if (auth) {
+    const token = getToken();
+    if (token) {
+      finalHeaders["Authorization"] = `Bearer ${token}`;
+    }
+    const pk = getPlayerKey();
+    if (pk) finalHeaders["X-Player-Key"] = pk;
+  }
+
+  const res = await fetch(`${API_BASE_URL}${path}`, {
+    ...rest,
+    headers: finalHeaders,
+  });
+
+  if (!res.ok) {
+    let detail = `Request failed (${res.status})`;
+    try {
+      const err = await res.json();
+      detail = typeof err.detail === "string" ? err.detail : detail;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail);
+  }
+
+  return res.json() as Promise<T>;
+}
+
+// ---- Guest player identity (ต่ออุปกรณ์) ----
+
+export function getPlayerKey(): string {
+  if (typeof window === "undefined") return "";
+  let key = localStorage.getItem("eduquest_player_key");
+  if (!key) {
+    key = Array.from(crypto.getRandomValues(new Uint8Array(16)))
+      .map((b) => b.toString(36).padStart(2, "0"))
+      .join("")
+      .slice(0, 24);
+    localStorage.setItem("eduquest_player_key", key);
+  }
+  return key;
+}
+
+// ------------------------------------------------------------------------------
+// Auth API
+// ------------------------------------------------------------------------------
+
+export async function loginRequest(email: string, password: string) {
+  const body = new URLSearchParams({ username: email, password });
+  const data = await request<{ access_token: string; token_type: string }>(
+    "/api/login",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body,
+      auth: false,
+    }
+  );
+  setToken(data.access_token);
+  const me = await getMe();
+  cacheUser(me);
+  return data;
+}
+
+export async function registerRequest(
+  name: string,
+  email: string,
+  password: string
+): Promise<CurrentUser> {
+  return request<CurrentUser>("/api/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, email, password }),
+    auth: false,
+  });
+}
+
+export async function getMe(): Promise<CurrentUser> {
+  return request<CurrentUser>("/api/users/me");
+}
+
+export function logout() {
+  clearToken();
+}
+
+// Demo
+const DEMO_EMAIL = "demo-teacher@eduquest.com";
+const DEMO_PASSWORD = "demo12345";
+
+export async function demoLogin(): Promise<boolean> {
+  try {
+    await loginRequest(DEMO_EMAIL, DEMO_PASSWORD);
+    return true;
+  } catch {
+    try {
+      await registerRequest("Demo Teacher", DEMO_EMAIL, DEMO_PASSWORD);
+      await loginRequest(DEMO_EMAIL, DEMO_PASSWORD);
+      return true;
+    } catch (err) {
+      console.error("Demo login failed:", err);
+      return false;
+    }
+  }
+}
+
+// ------------------------------------------------------------------------------
+// Courses
+// ------------------------------------------------------------------------------
+
+export type CourseStatus = "DRAFT" | "GENERATING" | "READY" | "PUBLISHED" | "ARCHIVED";
+export type VisualStyle = "pixel_art" | "modern_2d" | "fantasy" | "scifi";
+
+export interface CourseSummary {
+  id: number;
+  teacher_id: number;
+  title: string;
+  description: string | null;
+  subject: string | null;
+  difficulty: string | null;
+  game_modes: string[];
+  visual_style: VisualStyle;
+  status: CourseStatus;
+  thumbnail: string | null;
+  created_at: string;
+}
+
+export interface CreateCoursePayload {
+  title: string;
+  description?: string;
+  subject?: string;
+  difficulty?: string;
+  gameModes: string[];
+  visualStyle: VisualStyle;
+}
+
+export async function createCourse(payload: CreateCoursePayload) {
+  const formData = new FormData();
+  formData.append("title", payload.title);
+  formData.append("description", payload.description ?? "");
+  formData.append("subject", payload.subject ?? "");
+  formData.append("difficulty", payload.difficulty ?? "");
+  formData.append("game_modes", JSON.stringify(payload.gameModes));
+  formData.append("visual_style", payload.visualStyle);
+  return request<CourseSummary>("/api/courses", { method: "POST", body: formData });
+}
+
+export async function listCourses(): Promise<CourseSummary[]> {
+  return request<CourseSummary[]>("/api/courses");
+}
+
+export async function deleteCourse(courseId: number) {
+  return request<{ message: string }>(`/api/courses/${courseId}`, { method: "DELETE" });
+}
+
+export async function publishCourse(courseId: number) {
+  return request<CourseSummary>(`/api/courses/${courseId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status: "PUBLISHED" }),
+  });
+}
+
+export type AccessMode = "private" | "unlisted" | "public";
+
+export interface PublishResult {
+  message: string;
+  status: string;
+  access_mode: AccessMode;
+  share_token: string;
+  share_path: string;
+  share_code: string | null;
+}
+
+export async function publishGame(
+  courseId: number,
+  accessMode: AccessMode = "unlisted"
+): Promise<PublishResult> {
+  return request<PublishResult>(`/api/courses/${courseId}/publish`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ access_mode: accessMode }),
+  });
+}
+
+export interface ShareInfo {
+  status: string;
+  access_mode: AccessMode;
+  share_token: string | null;
+  share_path: string | null;
+  share_code: string | null;
+}
+
+export async function resolveJoinCode(code: string): Promise<{ share_path: string; course_title: string }> {
+  const normalized = code.trim().toUpperCase();
+  return request<{ share_path: string; course_title: string }>(
+    `/play/code/${encodeURIComponent(normalized)}`,
+    { auth: false }
+  );
+}
+
+export async function getShareInfo(courseId: number): Promise<ShareInfo> {
+  return request<ShareInfo>(`/api/courses/${courseId}/share/info`);
+}
+
+export async function regenerateShareLink(courseId: number): Promise<{ share_path: string; share_code: string | null }> {
+  return request<{ share_path: string; share_code: string | null }>(
+    `/api/courses/${courseId}/share/regenerate`,
+    { method: "POST" }
+  );
+}
+
+export async function disableShareLink(courseId: number): Promise<{ message: string }> {
+  return request<{ message: string }>(`/api/courses/${courseId}/share/disable`, { method: "POST" });
+}
+
+export function shareUrl(sharePath: string): string {
+  if (typeof window === "undefined") return sharePath;
+  return `${window.location.origin}${sharePath}`;
+}
+
+export async function getPublicCourse(token: string): Promise<CourseStructure> {
+  return request<CourseStructure>(`/play/${token}`, { auth: false });
+}
+
+export const getAllCourses = listCourses;
+export type Course = CourseSummary;
+
+// ------------------------------------------------------------------------------
+// Documents / Upload
+// ------------------------------------------------------------------------------
+
+export async function uploadDocument(courseId: number, file: File) {
+  const formData = new FormData();
+  formData.append("file", file);
+  return request<{ message: string; document_id: number }>(
+    `/api/courses/${courseId}/documents`,
+    { method: "POST", body: formData }
+  );
+}
+
+// ------------------------------------------------------------------------------
+// AI: Analyze / Recommend / Generate
+// ------------------------------------------------------------------------------
+
+export interface GenerateResult {
+  message: string;
+  world_name: string;
+  theme: string;
+  chapters_created: string[];
+  zones_created: number;
+  npcs_created: number;
+  enemies_created: number;
+  bosses_created: number;
+  levels_created: number;
+  badges_created: number;
+}
+
+export async function generateGame(
+  courseId: number,
+  opts: { visualStyle?: VisualStyle; aiInstruction?: string } = {}
+): Promise<GenerateResult> {
+  const formData = new FormData();
+  if (opts.visualStyle) formData.append("visual_style", opts.visualStyle);
+  if (opts.aiInstruction) formData.append("ai_instruction", opts.aiInstruction);
+  return request<GenerateResult>(`/api/courses/${courseId}/generate`, {
+    method: "POST",
+    body: formData,
+  });
+}
+
+export const generateCourse = generateGame;
+export const generateGamification = generateGame;
+
+// ------------------------------------------------------------------------------
+// Course Structure (public read)
+// ------------------------------------------------------------------------------
+
+export interface QuizQuestionView {
+  id: number;
+  question: string;
+  options: string[];
+  explanation: string;
+  difficulty: string;
+  points: number;
+  source_reference: string | null;
+}
+
+export interface LessonView {
+  title: string;
+  objective: string;
+  content: string;
+}
+
+export interface ChapterView {
+  chapter_id: number;
+  title: string;
+  lesson: LessonView | null;
+  quiz_questions: QuizQuestionView[];
+}
+
+export interface ZoneView {
+  name: string;
+  chapter_index: number;
+  chapter_id: number | null;
+  environment: string;
+  description: string;
+}
+
+export interface NpcView {
+  name: string;
+  role: string;
+  personality: string;
+  dialogue: string;
+  related_concept: string;
+}
+
+export interface EnemyView {
+  name: string;
+  represents_concept: string;
+  attack_description: string;
+  weakness_hint: string;
+  hp: number;
+  xp_reward: number;
+}
+
+export interface BossView {
+  name: string;
+  title: string;
+  phases: string[];
+  total_hp: number;
+  xp_reward: number;
+  related_concepts: string[];
+  source_reference: string;
+}
+
+export interface WorldView {
+  world_name: string | null;
+  intro_story: string | null;
+  ending_story: string | null;
+  visual_style: string;
+  language?: string;
+  zones: ZoneView[];
+  npcs: NpcView[];
+  enemies: EnemyView[];
+  bosses: BossView[];
+}
+
+export interface LevelData {
+  level: number;
+  title: string;
+  xp_required: number;
+}
+
+export interface BadgeData {
+  name: string;
+  description: string;
+  condition_hint: string;
+}
+
+export interface CourseStructure {
+  course_id: number;
+  course_title: string;
+  course_description: string | null;
+  status: string;
+  game_modes?: string[];
+  art_bible?: {
+    hero_id?: string;
+    npcs?: { name: string; asset_id: string }[];
+    enemies?: { name: string; asset_id: string }[];
+    bosses?: { name: string; asset_id: string }[];
+  } | null;
+  world: WorldView | Record<string, never>;
+  chapters: ChapterView[];
+  gamification: { levels: LevelData[]; badges: BadgeData[] };
+}
+
+export async function getCourseStructure(courseId: number): Promise<CourseStructure> {
+  return request<CourseStructure>(`/api/courses/${courseId}/structure`, { auth: false });
+}
+
+// ------------------------------------------------------------------------------
+// Gameplay Sessions — backend-validated XP (anti-cheat)
+// ------------------------------------------------------------------------------
+
+export interface AnsweredRecord {
+  answer: number | null;
+  correct: boolean;
+  correct_answer_index: number | null;
+  explanation: string | null;
+  source_reference: string | null;
+  points?: number;
+}
+
+export interface Resources {
+  gold: number;
+  wood: number;
+  stone: number;
+  crystal: number;
+  knowledge: number;
+}
+
+export interface RaidInfo {
+  name: string;
+  started_at: number;
+  ends_at: number;
+}
+
+export interface GameState {
+  hp?: number;
+  max_hp?: number;
+  combo: number;
+  best_combo: number;
+  deaths: number;
+  resources: Resources;
+  buildings: string[];
+  last_collected?: number;
+  raid_cooldown_until?: number;
+  raid?: RaidInfo | null;
+  raids_repelled?: number;
+}
+
+export interface SkillInfo {
+  streak: number;
+  skill: string;
+  name: string;
+  desc: string;
+}
+
+export interface SessionState {
+  session_id: number;
+  created: boolean;
+  fresh_run: boolean;
+  xp: number;
+  answered: Record<string, AnsweredRecord>;
+  completed_chapters: number[];
+  status: string;
+  modes: string[];
+  game_state: GameState;
+  skills: SkillInfo[];
+  pending?: Partial<Resources>;
+  pending_per_building?: Record<string, Partial<Resources>>;
+  raid?: RaidInfo | null;
+  notice?: string | null;
+}
+
+export async function startSession(
+  courseId: number,
+  opts: { fresh?: boolean } = {}
+): Promise<SessionState> {
+  const query = opts.fresh ? "?fresh=true" : "";
+  return request<SessionState>(`/api/courses/${courseId}/sessions${query}`, { method: "POST" });
+}
+
+export interface AnswerResult {
+  already_answered: boolean;
+  correct: boolean;
+  correct_answer_index: number | null;
+  explanation?: string;
+  source_reference?: string | null;
+  points?: number;
+  xp_awarded: number;
+  total_xp: number;
+  resources_awarded?: Partial<Resources>;
+  enemy_damage?: number;
+  game_state?: GameState;
+  skills?: SkillInfo[];
+  defeated?: boolean;
+  raid_expired?: string | null;
+}
+
+export async function submitAnswer(
+  sessionId: number,
+  questionId: number,
+  answerIndex: number
+): Promise<AnswerResult> {
+  return request<AnswerResult>(`/api/sessions/${sessionId}/answer`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question_id: questionId, answer_index: answerIndex }),
+  });
+}
+
+export interface CheckpointResult {
+  message: string;
+  newly_completed: boolean;
+  bonus_xp: number;
+  total_xp: number;
+  level: LevelData;
+  badges_earned: { name: string; description: string }[];
+  completed_chapters: number[];
+  progress_percent: number;
+  chapter_rewards?: Partial<Resources>;
+  game_state?: GameState;
+}
+
+export async function completeChapter(
+  sessionId: number,
+  chapterId: number
+): Promise<CheckpointResult> {
+  return request<CheckpointResult>(`/api/sessions/${sessionId}/complete-chapter`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chapter_id: chapterId }),
+  });
+}
+
+export interface GameResult {
+  score: number;
+  accuracy_percent: number;
+  learning_coverage_percent: number;
+  per_chapter: { chapter: string; percent: number; mastery_percent: number }[];
+  needs_practice: string[];
+  recommendations: string[];
+  total_xp: number;
+  questions_total: number;
+  questions_attempted: number;
+  questions_correct: number;
+}
+
+export async function finishSession(sessionId: number): Promise<GameResult> {
+  return request<GameResult>(`/api/sessions/${sessionId}/finish`, { method: "POST" });
+}
+
+export async function getMyProgress() {
+  return request<{ total_xp: number; sessions: unknown[] }>("/api/users/me/progress");
+}
+
+// ---- Base Economy v2 ----
+
+export const RESOURCE_META: Record<keyof Resources, { icon: string; label: string }> = {
+  gold: { icon: "💰", label: "Gold" },
+  wood: { icon: "🪵", label: "Wood" },
+  stone: { icon: "🪨", label: "Stone" },
+  crystal: { icon: "💎", label: "Crystal" },
+  knowledge: { icon: "📖", label: "Knowledge" },
+};
+
+export const PASSIVE_YIELD: Record<string, Partial<Record<keyof Resources, number>>> = {
+  house: { gold: 2 },
+  farm: { gold: 6 },
+  mine: { stone: 4 },
+  workshop: { wood: 3 },
+  library: { knowledge: 1 },
+  academy: { knowledge: 1 },
+  castle: { crystal: 1 },
+};
+
+export interface SessionStatus {
+  game_state: GameState;
+  pending: Partial<Resources>;
+  pending_per_building: Record<string, Partial<Resources>>;
+  raid: RaidInfo | null;
+  notice?: string | null;
+}
+
+export async function getSessionStatus(sessionId: number): Promise<SessionStatus> {
+  return request<SessionStatus>(`/api/sessions/${sessionId}/status`);
+}
+
+export interface CollectResult {
+  message: string;
+  collected: Partial<Resources>;
+  game_state: GameState;
+  raid_expired?: string | null;
+}
+
+export async function collectProduction(sessionId: number): Promise<CollectResult> {
+  return request<CollectResult>(`/api/sessions/${sessionId}/collect`, { method: "POST" });
+}
+
+export interface RaidQuestion {
+  question_id: number;
+  question: string;
+  options: string[];
+  points: number;
+}
+
+export async function getRaidQuestion(sessionId: number): Promise<RaidQuestion> {
+  return request<RaidQuestion>(`/api/sessions/${sessionId}/raid/question`, { method: "POST" });
+}
+
+export interface RaidDefendResult {
+  repelled: boolean;
+  expired?: boolean;
+  message: string;
+  loot?: Partial<Resources>;
+  xp_bonus?: number;
+  total_xp?: number;
+  correct_answer_index?: number | null;
+  explanation?: string | null;
+  game_state: GameState;
+}
+
+export async function defendRaid(
+  sessionId: number,
+  payload: { question_id: number; answer_index: number }
+): Promise<RaidDefendResult> {
+  return request<RaidDefendResult>(`/api/sessions/${sessionId}/raid/defend`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export interface ReviveResult {
+  message: string;
+  game_state: GameState;
+  lost_gold: number;
+}
+
+export async function reviveSession(sessionId: number): Promise<ReviveResult> {
+  return request<ReviveResult>(`/api/sessions/${sessionId}/revive`, { method: "POST" });
+}
+
+export interface BuildResult {
+  message: string;
+  building: string;
+  game_state: GameState;
+}
+
+export async function buildBuilding(
+  sessionId: number,
+  buildingId: string
+): Promise<BuildResult> {
+  return request<BuildResult>(`/api/sessions/${sessionId}/build`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ building_id: buildingId }),
+  });
+}
+
+export interface HintResult {
+  eliminated_option: number;
+  game_state: GameState;
+  message: string;
+}
+
+export async function requestHint(
+  sessionId: number,
+  questionId: number
+): Promise<HintResult> {
+  return request<HintResult>(`/api/sessions/${sessionId}/hint`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question_id: questionId }),
+  });
+}
+
+export const BUILDING_CATALOG: Record<
+  string,
+  {
+    name: string;
+    icon: string;
+    cost: Partial<Record<keyof Resources, number>>;
+    unlock_chapters: number;
+    effect_text: string;
+    requires?: string[];
+  }
+> = {
+  house: { name: "บ้าน", icon: "🏠", cost: { wood: 20, stone: 10 }, unlock_chapters: 0, effect_text: "+20 Max HP" },
+  farm: { name: "ไร่", icon: "🌾", cost: { gold: 30 }, unlock_chapters: 0, effect_text: "+5 Gold/ตอบถูก" },
+  mine: { name: "เหมืองหิน", icon: "⛏️", cost: { wood: 15 }, unlock_chapters: 1, effect_text: "+3 Stone/ตอบถูก" },
+  workshop: { name: "โรงฝึกงาน", icon: "🔨", cost: { stone: 20, wood: 10 }, unlock_chapters: 1, effect_text: "+2 Wood/ตอบถูก" },
+  library: { name: "ห้องสมุด", icon: "📚", cost: { gold: 40, wood: 20 }, unlock_chapters: 2, effect_text: "+1 Knowledge/ตอบถูก" },
+  academy: { name: "สถาบันการศึกษา", icon: "🏛️", cost: { gold: 60, stone: 30, knowledge: 10 }, unlock_chapters: 2, effect_text: "XP +25%" },
+  castle: { name: "ปราสาท", icon: "🏰", cost: { wood: 50, stone: 50, crystal: 10 }, unlock_chapters: 3, effect_text: "🏆 เป้าหมายสูงสุด!", requires: ["house", "farm", "library"] },
+};

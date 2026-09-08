@@ -1,0 +1,25 @@
+# Render Blueprint — deploy backend อัตโนมัติจาก repo
+# ใช้: Render Dashboard → New → Blueprint → เลือก repo นี้
+
+services:
+  - type: web
+    name: eduquest-api
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /
+    plan: free
+    envVars:
+      - key: DATABASE_URL
+        sync: false      # ใส่เองใน Dashboard (Neon connection string)
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ALGORITHM
+        value: HS256
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "1440"
+      - key: CORS_ORIGINS
+        sync: false      # https://your-app.vercel.app
