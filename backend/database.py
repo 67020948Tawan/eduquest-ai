@@ -22,6 +22,7 @@ Base = declarative_base()
 
 
 async def get_db():
+    """ยืม DB session ให้ endpoint ใช้ครั้งเดียวแล้วปิด (FastAPI Depends)"""
     async with SessionLocal() as session:
         yield session
 
@@ -48,6 +49,7 @@ _MISSING_COLUMN_DEFAULTS = {
 
 
 async def init_db() -> None:
+    """รันตอน backend start: สร้างตารางที่ยังไม่มี + ALTER เติมคอลัมน์ใหม่ตาม _MISSING_COLUMN_DEFAULTS"""
     from models import user, course, document, chapter, lesson, quiz_question, level, badge, game_session  # noqa: F401
 
     async with engine.begin() as conn:

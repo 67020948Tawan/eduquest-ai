@@ -66,6 +66,7 @@ def _read_source(file_path: str) -> str:
 # ------------------------------------------------------------------------------
 
 async def analyze_content(file_path: str) -> dict:
+    """Agent 1: อ่านเอกสาร → สกัด subject/topics/objectives/difficulty (คืน dict หรือ {"error": ...})"""
     try:
         source = _read_source(file_path)
         provider = get_ai_provider()

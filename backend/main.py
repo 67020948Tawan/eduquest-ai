@@ -15,8 +15,12 @@ for _stream in (sys.stdout, sys.stderr):
         except Exception:
             pass
 
+from dotenv import load_dotenv
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 from database import engine, init_db
 from api.auth import router as auth_router
@@ -27,6 +31,7 @@ from api.public import router as public_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """lifecycle ของแอป: startup → init_db() สร้างตาราง, shutdown → ปิด connection pool"""
     # Startup: create tables + auto-migrate new columns
     await init_db()
     print("✅ Database ready")
@@ -65,6 +70,7 @@ app.include_router(public_router)
 
 @app.get("/")
 def read_root():
+    """health check: ใช้ตรวจว่า backend รันอยู่ (เช่น Render healthCheckPath)"""
     return {"message": "EduQuest AI is running", "docs": "/docs"}
 
 

@@ -17,6 +17,7 @@ class AIProviderError(Exception):
 
 
 def _strip_markdown_fence(raw: str) -> str:
+    """ลอก ```json ... ``` ออกจากคำตอบ AI ก่อน json.loads (AI ชอบห่อ codeblock มา)"""
     cleaned = raw.strip()
     if cleaned.startswith("```json"):
         cleaned = cleaned[7:]

@@ -18,6 +18,7 @@ router = APIRouter(prefix="/api", tags=["auth"])
 
 @router.post("/register", response_model=UserResponse)
 async def register_user(user: UserCreate, db: AsyncSession = Depends(get_db)):
+    """สมัครสมาชิก: ตรวจอีเมลซ้ำ → แฮชรหัสผ่าน → สร้าง user ใหม่ (ไม่มี role ใน input, default เป็น STUDENT)"""
     result = await db.execute(select(User).where(User.email == user.email))
     if result.scalars().first():
         raise HTTPException(status_code=400, detail="อีเมลนี้ถูกใช้งานแล้ว")
@@ -38,6 +39,7 @@ async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_db),
 ):
+    """ล็อกอิน: รับ username(=email)+password แบบฟอร์ม → ตรวจรหัส → ออก JWT (เก็บ email ใน sub)"""
     result = await db.execute(select(User).where(User.email == form_data.username))
     user = result.scalars().first()
 
@@ -54,4 +56,5 @@ async def login(
 
 @router.get("/users/me", response_model=UserResponse)
 async def get_my_profile(current_user: User = Depends(get_current_user)):
+    """ดึงโปรไฟล์ตัวเองจาก token (ไม่ส่ง password_hash กลับ — ดู schemas/user.py)"""
     return current_user

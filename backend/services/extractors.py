@@ -27,6 +27,7 @@ class ExtractionError(Exception):
 
 
 def _extract_pdf(file_path: str) -> str:
+    """ดึงข้อความที่ฝังใน PDF ทีละหน้า + ใส่ tag [Page N] ให้ AI อ้างอิงตำแหน่งได้"""
     import fitz  # PyMuPDF
 
     parts: list[str] = []
@@ -75,6 +76,7 @@ def _ocr_pdf(file_path: str) -> str:
 
 
 def _extract_docx(file_path: str) -> str:
+    """ดึงข้อความทุกย่อหน้าใน Word (.docx) — ข้ามย่อหน้าว่าง"""
     from docx import Document as DocxDocument
 
     doc = DocxDocument(file_path)
@@ -82,6 +84,7 @@ def _extract_docx(file_path: str) -> str:
 
 
 def _extract_pptx(file_path: str) -> str:
+    """ดึงข้อความทุก text frame ใน PowerPoint (.pptx) พร้อม tag [Slide N]"""
     from pptx import Presentation
 
     prs = Presentation(file_path)
@@ -94,6 +97,7 @@ def _extract_pptx(file_path: str) -> str:
 
 
 def _extract_plain(file_path: str) -> str:
+    """อ่านไฟล์ข้อความล้วน (.txt/.md) — ข้าม byte ที่ decode ไม่ได้"""
     with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
         return f.read()
 

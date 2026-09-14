@@ -7,6 +7,7 @@ import SiteHeader from "@/components/SiteHeader";
 import { PixelSprite, PixelScene, BattleStage, type BattlePhase } from "@/components/PixelArt";
 import BasePanel from "@/components/game/BasePanel";
 import DialogueBox, { type DialogueNpc } from "@/components/game/DialogueBox";
+import WorldMapView, { type MapNode } from "@/components/game/WorldMapView";
 import { useAuthToken } from "@/lib/useAuthToken";
 import {
   getCourseStructure,
@@ -90,9 +91,7 @@ function CoursePlayInner() {
   const [playerHit, setPlayerHit] = useState(false);
   const [gameOver, setGameOver] = useState(false);
   const [battlePhase, setBattlePhase] = useState<BattlePhase>("idle");
-
-  // Mini Battle Bar — sticky ติดจอตลอดขณะเล่น combat (บางๆ ไม่บังคำถาม)
-  // Stage เต็มอยู่ใน flow ปกติด้านบน — scroll หายไปตามธรรมชาติ ไม่เด้งไม่ทับ
+  const qCardRef = useRef<HTMLDivElement>(null);
 
   // Checkpoint / Result / Restart
   const [checkpoint, setCheckpoint] = useState<CheckpointResult | null>(null);
@@ -385,7 +384,10 @@ function CoursePlayInner() {
       });
     }
     setQIndex((i) => Math.min(i + 1, qs.length));
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    // เลื่อนแค่การ์ดคำถามเข้าจอ — ไม่ดันฉากเกมหลุด (desktop เห็นพร้อมกันอยู่แล้ว)
+    requestAnimationFrame(() => {
+      qCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   }
 
   async function handleCompleteChapter() {
@@ -595,72 +597,65 @@ function CoursePlayInner() {
                   </button>
                 </div>
 
-                <div className="space-y-3">
-                  {(zones.length > 0
-                    ? zones.map((zone) => ({
-                        zone,
-                        chapter:
-                          zone.chapter_id != null
-                            ? data.chapters.find((c) => c.chapter_id === zone.chapter_id)
-                            : undefined,
-                      }))
-                    : data.chapters.map((c) => ({ zone: null, chapter: c }))
-                  )
-                    .filter(({ chapter }) => chapter !== undefined)
-                    .map(({ zone, chapter }) => {
-                      const idx = data.chapters.indexOf(chapter!);
-                      const unlocked = isChapterUnlocked(chapter!, idx);
-                      const done = completedChapters.includes(chapter!.chapter_id);
-                      const qTotal = chapter!.quiz_questions.length;
-                      const qDone = chapter!.quiz_questions.filter(
-                        (q) => answeredMap[String(q.id)] !== undefined
-                      ).length;
-                      const enemy = chapterEnemy(idx);
-
-                      return (
-                        <button
-                          key={chapter!.chapter_id}
-                          onClick={() => unlocked && openChapter(chapter!)}
-                          disabled={!unlocked}
-                          className={`flex w-full items-center gap-4 rounded-2xl border p-4 text-left transition-all duration-200 ${
-                            !unlocked
-                              ? "cursor-not-allowed border-slate-800/50 bg-slate-950 opacity-50"
-                              : done
-                                ? "border-emerald-800/50 bg-emerald-950/20 hover:-translate-y-0.5 hover:border-emerald-600 hover:shadow-lg hover:shadow-emerald-950/50"
-                                : "border-slate-700 bg-slate-900/60 hover:-translate-y-0.5 hover:border-indigo-400 hover:bg-slate-900 hover:shadow-lg hover:shadow-indigo-950/60"
-                          }`}
-                        >
-                          <span className={`relative shrink-0 overflow-hidden rounded-lg border border-slate-700 ${!unlocked ? "grayscale" : ""}`}>
-                            <PixelScene
-                              environment={zone?.environment || "forest"}
-                              seed={chapter!.title}
-                              style={visualStyle}
-                              width={84}
-                            />
-                            {!unlocked && (
-                              <span className="absolute inset-0 grid place-items-center bg-slate-950/70 text-xl">🔒</span>
-                            )}
-                          </span>
-
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate font-bold">{idx + 1}. {zone?.name || chapter!.title}</span>
-                            <span className="mt-0.5 block truncate text-sm text-slate-400">
-                              {!unlocked ? "ต้องจบโซนก่อนหน้าก่อน" : `${chapter!.title} · ${qTotal} ภารกิจ`}
-                            </span>
-                            {hasCombat && unlocked && (
-                              <span className="mt-1 inline-flex items-center gap-1 text-xs text-rose-400">
-                                👾 {enemy.isBoss ? "👹 BOSS: " : ""}{enemy.name}
-                                <span className="text-slate-500">· {enemy.maxHp} HP</span>
-                              </span>
-                            )}
-                          </span>
-                          <span className="shrink-0 text-right text-xs text-slate-500">
-                            {unlocked ? (qDone > 0 ? `${qDone}/${qTotal}` : "▶") : "🔒"}
-                          </span>
-                        </button>
-                      );
-                    })}
-                </div>
+                {(() => {
+                  const entries = (
+                    zones.length > 0
+                      ? zones.map((zone) => ({
+                          zone,
+                          chapter:
+                            zone.chapter_id != null
+                              ? data.chapters.find((c) => c.chapter_id === zone.chapter_id)
+                              : undefined,
+                        }))
+                      : data.chapters.map((c) => ({ zone: null, chapter: c }))
+                  ).filter(
+                    (e): e is { zone: typeof e.zone; chapter: ChapterView } =>
+                      e.chapter !== undefined
+                  );
+                  const envIcon = (env?: string) => {
+                    const s = (env || "").toLowerCase();
+                    if (s.includes("village")) return "🏠";
+                    if (s.includes("forest")) return "🌲";
+                    if (s.includes("mountain")) return "⛰️";
+                    if (s.includes("castle")) return "🏰";
+                    if (s.includes("dungeon") || s.includes("cave")) return "🔥";
+                    if (s.includes("city")) return "🏙️";
+                    if (s.includes("laboratory") || s.includes("lab")) return "🧪";
+                    return "🗺️";
+                  };
+                  const nodes: MapNode[] = entries.map(({ zone, chapter }) => {
+                    const idx = data.chapters.indexOf(chapter);
+                    const unlocked = isChapterUnlocked(chapter, idx);
+                    const done = completedChapters.includes(chapter.chapter_id);
+                    const qTotal = chapter.quiz_questions.length;
+                    const qDone = chapter.quiz_questions.filter(
+                      (q) => answeredMap[String(q.id)] !== undefined
+                    ).length;
+                    const enemy = chapterEnemy(idx);
+                    const isBoss = enemy.isBoss;
+                    return {
+                      key: chapter.chapter_id,
+                      title: zone?.name || chapter.title,
+                      subtitle: `${chapter.title} · ${qTotal} ภารกิจ${
+                        hasCombat ? ` · ${isBoss ? "BOSS " : ""}${enemy.name} ${enemy.maxHp} HP` : ""
+                      }`,
+                      icon: isBoss ? "👑" : envIcon(zone?.environment),
+                      state: done ? "done" : unlocked ? "current" : "locked",
+                      progressText: !unlocked ? "🔒" : qDone > 0 ? `${qDone}/${qTotal}` : "▶",
+                      isBoss,
+                    };
+                  });
+                  return (
+                    <WorldMapView
+                      nodes={nodes}
+                      visualStyle={visualStyle}
+                      onOpen={(i) => {
+                        const ch = entries[i]?.chapter;
+                        if (ch) openChapter(ch);
+                      }}
+                    />
+                  );
+                })()}
               </section>
 
               {/* Bosses */}
@@ -850,155 +845,110 @@ function CoursePlayInner() {
         ))}
       </div>
 
-      {/* Scene banner (animated) — ซ่อนเมื่อ combat mode เพราะ BattleStage มีฉากของตัวเอง */}
-      {!(hasCombat && viewMode === "play") && (
-        <div className="border-b border-slate-800/60">
-          <div className="mx-auto max-w-3xl overflow-hidden rounded-b-2xl shadow-xl shadow-slate-950/60">
-            <PixelScene
-              environment={zones.find((z) => z.chapter_id === chapter.chapter_id)?.environment || "village"}
-              seed={chapter.title}
-              style={visualStyle}
-              animated
-            />
-          </div>
-        </div>
-      )}
-
-      {/* Chapter HUD */}
-      <div className="sticky top-16 z-40 border-b border-slate-800/60 bg-slate-950/90 backdrop-blur">
-        <div className="mx-auto flex max-w-3xl flex-wrap items-center justify-between gap-2 px-6 py-3 text-sm">
+      {/* Slim sticky HUD — แถบเดียวจบ: กลับแผนที่ · ชื่อด่าน · HP/XP/combo */}
+      <div className={`${isGuest ? "top-0" : "top-16"} sticky z-40 border-b border-slate-800/60 bg-slate-950/90 backdrop-blur`}>
+        <div className="mx-auto flex max-w-7xl items-center gap-2 px-4 py-2 text-sm lg:px-6">
           <button
             onClick={() => setScreen("map")}
-            className="rounded-lg border border-slate-700 px-3 py-1.5 text-slate-300 transition hover:border-indigo-500 hover:text-white"
+            aria-label="กลับแผนที่"
+            className="shrink-0 rounded-lg border border-slate-700 px-2.5 py-1.5 text-slate-300 transition hover:border-indigo-500 hover:text-white"
           >
-            ← Map
+            ← <span className="hidden sm:inline">Map</span>
           </button>
-          {hasCombat && (
-            <div className="flex items-center gap-3">
-              <span className="text-rose-300">❤️ {gs.hp ?? 0}/{gs.max_hp ?? 100}</span>
-              <div className="h-2 w-24 overflow-hidden rounded-full bg-slate-800">
-                <div
-                  className="h-full bg-gradient-to-r from-rose-500 to-red-500 transition-all duration-500"
-                  style={{ width: `${Math.max(0, Math.min(100, ((gs.hp ?? 0) / Math.max(1, gs.max_hp ?? 100)) * 100))}%` }}
-                />
-              </div>
-            </div>
-          )}
-          <div className="flex items-center gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="truncate font-bold leading-tight">{chapter.title}</p>
+            {viewMode === "play" && (
+              <p className="text-[11px] leading-tight text-slate-500">
+                ข้อ {Math.min(qIndex + 1, chapter.quiz_questions.length)}/{chapter.quiz_questions.length}
+                {hasCombat && <> · 👾 {enemy.isBoss ? "👑 " : ""}{enemy.name} {Math.max(0, enemyHp)}/{enemy.maxHp}</>}
+              </p>
+            )}
+          </div>
+          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+            {hasCombat && (
+              <span className="rounded-full border border-rose-500/30 bg-rose-950/40 px-2.5 py-1 text-xs font-bold text-rose-300">
+                ❤️ {gs.hp ?? 0}/{gs.max_hp ?? 100}
+              </span>
+            )}
+            {(gs.combo ?? 0) >= 2 && (
+              <span className="eq-pop rounded-full border border-orange-500/40 bg-orange-950/40 px-2.5 py-1 text-xs font-bold text-orange-300">
+                🔥x{gs.combo}
+              </span>
+            )}
             {hasBase && (
-              <span className="text-xs text-slate-300">
+              <span className="hidden text-xs text-slate-300 md:inline">
                 💰{gs.resources.gold} 🪵{gs.resources.wood} 🪨{gs.resources.stone} 💎{gs.resources.crystal}
               </span>
             )}
-            <span className="font-bold text-amber-400">🔥 XP {xp}</span>
-            {(gs.combo ?? 0) >= 3 && <span className="eq-pop text-orange-300">🔥x{comboMult}</span>}
-          </div>
-        </div>
-      </div>
-
-      {/* MINI BATTLE BAR — sticky เฉพาะตอนเล่น combat · บางๆ ไม่บังคำถาม */}
-      {hasCombat && viewMode === "play" && (
-        <div className="sticky top-16 z-30 border-b border-slate-800/60 bg-slate-950/95 backdrop-blur">
-          <div className={`mx-auto flex max-w-3xl items-center gap-3 px-6 py-2 ${enemyShake ? "eq-shake" : ""}`}>
-            <span className="shrink-0">
-              <PixelSprite
-                kind={enemy.isBoss ? "boss" : "enemy"}
-                seed={enemy.name}
-                style={visualStyle}
-                size={36}
-              />
+            <span className="rounded-full border border-amber-500/30 bg-amber-950/40 px-2.5 py-1 text-xs font-bold text-amber-400">
+              🔥 {xp.toLocaleString()}
             </span>
-            <div className="min-w-0 flex-1 space-y-1">
-              {/* Enemy HP */}
-              <div className="flex items-center gap-2">
-                <span className="w-24 shrink-0 truncate text-[11px] font-bold text-rose-300">
-                  {enemy.isBoss ? "👑 " : "👾 "}{enemy.name}
-                </span>
-                <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-800">
-                  <div
-                    className="h-full rounded-full bg-gradient-to-r from-orange-400 to-rose-500 transition-all duration-300"
-                    style={{ width: `${Math.max(0, Math.min(100, (Math.max(0, enemyHp) / enemy.maxHp) * 100))}%` }}
-                  />
-                </div>
-                <span className="w-14 shrink-0 text-right text-[10px] font-semibold text-slate-400">
-                  {Math.max(0, enemyHp)}/{enemy.maxHp}
-                </span>
-              </div>
-              {/* Player HP */}
-              <div className="flex items-center gap-2">
-                <span className="w-24 shrink-0 text-[11px] font-bold text-emerald-300">❤️ YOU</span>
-                <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-800">
-                  <div
-                    className={`h-full rounded-full transition-all duration-300 ${
-                      (gs.hp ?? 0) / Math.max(1, gs.max_hp ?? 100) > 0.3
-                        ? "bg-gradient-to-r from-emerald-400 to-teal-400"
-                        : "bg-gradient-to-r from-rose-500 to-red-500"
-                    }`}
-                    style={{ width: `${Math.max(0, Math.min(100, ((gs.hp ?? 0) / Math.max(1, gs.max_hp ?? 100)) * 100))}%` }}
-                  />
-                </div>
-                <span className="w-14 shrink-0 text-right text-[10px] font-semibold text-slate-400">
-                  {gs.hp ?? 0}/{gs.max_hp ?? 100}
-                </span>
-              </div>
-            </div>
-            {(gs.combo ?? 0) >= 3 && (
-              <span className="eq-pop shrink-0 rounded-full border border-orange-400/60 bg-orange-950/60 px-2 py-0.5 text-xs font-black text-orange-300">
-                🔥×{comboMult}
-              </span>
-            )}
-            {floaty && (
-              <span
-                key={floaty.id}
-                className="eq-float eq-dmg pointer-events-none absolute right-[28%] -top-2 z-10 text-lg"
-                style={{ color: floaty.color }}
-              >
-                {floaty.text}
-              </span>
-            )}
           </div>
         </div>
-      )}
-
-      <main className="mx-auto w-full max-w-3xl flex-1 px-6 py-8">
-        <h1 className="text-2xl font-bold">{chapter.title}</h1>
-
-        {/* Turn-Based Combat: Battle Stage (in-flow — scroll หายตามธรรมชาติ ไม่บังคำถาม) */}
-        {hasCombat && viewMode === "play" && (
-          <div className={`relative mx-auto mt-5 max-w-xl ${enemyShake ? "eq-shake" : ""}`}>
-            <BattleStage
-              environment={
-                zones.find((z) => z.chapter_id === chapter.chapter_id)?.environment ||
-                "village"
-              }
-              seed={chapter.title}
-              style={visualStyle}
-              enemyName={enemy.name}
-              enemyKind={enemy.isBoss ? "boss" : "enemy"}
-              enemyHpRatio={Math.max(0, enemyHp) / Math.max(1, enemy.maxHp)}
-              playerHpRatio={(gs.hp ?? 0) / Math.max(1, gs.max_hp ?? 100)}
-              phase={battlePhase}
-              defeated={enemyDefeatAnim}
-                          />
-            {floaty && (
-              <span
-                key={floaty.id}
-                className="eq-float eq-dmg pointer-events-none absolute right-[22%] top-[28%] z-10 text-3xl"
-                style={{ color: floaty.color }}
-              >
-                {floaty.text}
-              </span>
-            )}
-            {(gs.combo ?? 0) >= 3 && (
-              <span className="eq-pop pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 rounded-full border border-orange-400/60 bg-slate-950/70 px-4 py-1.5 text-sm font-black text-orange-300 backdrop-blur-sm">
-                🔥 COMBO x{gs.combo} — DMG ×{comboMult}
-              </span>
-            )}
+        {/* เส้น progress บางๆ ใต้ HUD */}
+        {viewMode === "play" && (
+          <div className="h-0.5 bg-slate-800/60">
+            <div
+              className="h-full bg-gradient-to-r from-indigo-500 to-emerald-500 transition-all duration-500"
+              style={{ width: `${(chapter.quiz_questions.filter((q) => answeredMap[String(q.id)] !== undefined).length / Math.max(1, chapter.quiz_questions.length)) * 100}%` }}
+            />
           </div>
         )}
+      </div>
 
+      <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-5 lg:px-6">
+        <div className="grid items-start gap-5 lg:grid-cols-[440px_minmax(0,1fr)] xl:grid-cols-[560px_minmax(0,1fr)]">
+          {/* ===== LEFT: มุมมองเกม (PC: sticky ค้างซ้าย · มือถือ: อยู่บนสุดย่อขนาด) ===== */}
+          <aside className="lg:sticky lg:top-32">
+            <div className={`relative overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/50 shadow-xl shadow-slate-950/60 ${enemyShake ? "eq-shake" : ""}`}>
+              {hasCombat && viewMode === "play" ? (
+                <>
+                  <BattleStage
+                    environment={
+                      zones.find((z) => z.chapter_id === chapter.chapter_id)?.environment ||
+                      "village"
+                    }
+                    seed={chapter.title}
+                    style={visualStyle}
+                    enemyName={enemy.name}
+                    enemyKind={enemy.isBoss ? "boss" : "enemy"}
+                    enemyHpRatio={Math.max(0, enemyHp) / Math.max(1, enemy.maxHp)}
+                    playerHpRatio={(gs.hp ?? 0) / Math.max(1, gs.max_hp ?? 100)}
+                    phase={battlePhase}
+                    defeated={enemyDefeatAnim}
+                  />
+                  {floaty && (
+                    <span
+                      key={floaty.id}
+                      className="eq-float eq-dmg pointer-events-none absolute right-[22%] top-[28%] z-10 text-3xl"
+                      style={{ color: floaty.color }}
+                    >
+                      {floaty.text}
+                    </span>
+                  )}
+                </>
+              ) : (
+                <PixelScene
+                  environment={zones.find((z) => z.chapter_id === chapter.chapter_id)?.environment || "village"}
+                  seed={chapter.title}
+                  style={visualStyle}
+                  animated
+                />
+              )}
+            </div>
+            {/* สถานะด่านใต้ฉาก — บรรทัดเดียว ไม่ซ้ำ HUD */}
+            <p className="mt-2 truncate text-center text-xs text-slate-500">
+              {viewMode === "play"
+                ? hasCombat
+                  ? `⚔️ ตอบถูก = โจมตี${comboMult > 1 ? ` ×${comboMult}` : ""} · ตอบผิด = โดนสวน`
+                  : `📖 ${chapter.quiz_questions.length} ภารกิจในโซนนี้`
+                : `🎯 ${chapter.lesson?.objective ?? ""}`}
+            </p>
+          </aside>
 
-        <div className="mt-5 inline-flex gap-1 rounded-full bg-slate-900 p-1">
+          {/* ===== RIGHT: โฟลว์เรียน/เล่น ===== */}
+          <section ref={qCardRef} className="min-w-0 scroll-mt-32">
+            <div className="inline-flex gap-1 rounded-full bg-slate-900 p-1">
           <button
             onClick={() => setViewMode("learn")}
             className={`rounded-full px-5 py-1.5 text-sm transition ${
@@ -1068,7 +1018,7 @@ function CoursePlayInner() {
               return (
                 <div
                   key={q.id}
-                  className={`eq-pop rounded-xl border p-3.5 transition-all ${
+                  className={`eq-pop rounded-2xl border p-5 transition-all sm:p-6 ${
                     result
                       ? result.correct
                         ? "border-emerald-800/60 bg-emerald-950/15"
@@ -1077,7 +1027,7 @@ function CoursePlayInner() {
                   }`}
                 >
                   <div className="mb-1 flex items-start justify-between gap-3">
-                    <p className="text-[15px] font-medium leading-snug">{q.question}</p>
+                    <p className="text-base font-medium leading-relaxed sm:text-lg">{q.question}</p>
                     <span className="shrink-0 rounded-full bg-amber-950/50 px-2.5 py-1 text-xs font-bold text-amber-400">
                       +{q.points} XP
                     </span>
@@ -1109,7 +1059,7 @@ function CoursePlayInner() {
                           key={optIdx}
                           disabled={locked || isEliminated || submittingId === q.id}
                           onClick={() => setSelected((prev) => ({ ...prev, [q.id]: optIdx }))}
-                          className={`rounded-lg border px-3 py-2 text-left text-[13px] leading-snug transition-all ${cls}`}
+                          className={`rounded-xl border px-4 py-2.5 text-left text-sm leading-relaxed transition-all ${cls}`}
                         >
                           {opt}
                         </button>
@@ -1158,7 +1108,7 @@ function CoursePlayInner() {
                                 ? `🎉 ถูกต้อง! +${result.xp_awarded} XP`
                                 : "❌ ยังไม่ถูก"}
                           </p>
-                          {result.explanation && <p className="text-xs leading-relaxed opacity-90">{result.explanation}</p>}
+                          {result.explanation && <p className="text-sm leading-relaxed opacity-90">{result.explanation}</p>}
                           {result.source_reference && (
                             <p className="mt-2 text-xs opacity-70">📚 Based on: {result.source_reference}</p>
                           )}
@@ -1180,21 +1130,13 @@ function CoursePlayInner() {
           </div>
         )}
 
-        {/* ทำครบทุกข้อแล้ว — รอกด checkpoint */}
-        {viewMode === "play" && qIndex >= chapter.quiz_questions.length && !checkpoint && (
-          <div className="eq-pop mt-5 rounded-2xl border border-slate-800 bg-slate-900/50 p-6 text-center text-slate-300">
-            <p className="text-2xl">🎯</p>
-            <p className="mt-2 font-semibold">ตอบครบทุกข้อแล้ว!</p>
-          </div>
-        )}
-
-            {/* Checkpoint */}
+            {/* Checkpoint — ขึ้นทันทีเมื่อตอบครบ (ไม่ต้องมีกล่องซ้ำ) */}
             {chapterQuestionsAnswered && !checkpoint && (
               <button
                 onClick={handleCompleteChapter}
-                className="w-full rounded-xl bg-gradient-to-r from-amber-400 via-orange-400 to-amber-500 py-4 text-lg font-black text-slate-950 shadow-xl shadow-orange-600/30 transition-all hover:scale-[1.01] hover:from-amber-300 hover:via-orange-300 active:scale-[0.99]"
+                className="mt-5 w-full rounded-xl bg-gradient-to-r from-amber-400 via-orange-400 to-amber-500 py-4 text-lg font-black text-slate-950 shadow-xl shadow-orange-600/30 transition-all hover:scale-[1.01] hover:from-amber-300 hover:via-orange-300 active:scale-[0.99]"
               >
-                🚩 บันทึก Checkpoint — รับโบนัส!
+                🎯 ตอบครบแล้ว! บันทึก Checkpoint — รับโบนัส!
               </button>
             )}
 
@@ -1222,6 +1164,8 @@ function CoursePlayInner() {
                 </button>
               </div>
             )}
+          </section>
+        </div>
       </main>
 
       {/* RPG Dialogue overlay */}

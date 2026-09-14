@@ -43,6 +43,7 @@ async def resolve_join_code(code: str, db: AsyncSession = Depends(get_db)):
 
 @router.get("/play/{token}")
 async def public_game(token: str, db: AsyncSession = Depends(get_db)):
+    """หน้า landing เกมสาธารณะ (ไม่ต้อง login): ตรวจ token + access_mode + PUBLISHED ก่อนส่งโครงสร้างเกม"""
     result = await db.execute(
         select(Course).where(Course.share_token == token)
     )

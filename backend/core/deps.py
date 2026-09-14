@@ -20,6 +20,7 @@ async def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> User:
+    """ตรวจ JWT จาก header → หา user จาก email ใน sub → เจอไม่ครบ 401 (ใช้กับ endpoint ที่ต้อง login)"""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="ไม่สามารถยืนยันตัวตนได้ (Token ไม่ถูกต้องหรือหมดอายุ)",
@@ -41,6 +42,7 @@ async def get_current_user(
 
 
 async def _user_from_bearer(request: Request, db: AsyncSession) -> User | None:
+    """helper: แกะ Bearer token เอง (ไม่ throw) — คืน user หรือ None ถ้าไม่มี/เสีย"""
     auth = request.headers.get("Authorization") or ""
     if not auth.lower().startswith("bearer "):
         return None

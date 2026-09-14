@@ -15,13 +15,16 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def get_password_hash(password: str) -> str:
+    """แฮชรหัสผ่านด้วย bcrypt ก่อนเก็บลง DB (ห้ามเก็บรหัสผ่านตรงๆ)"""
     return pwd_context.hash(password)
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """เทียบรหัสที่กรอกกับแฮชใน DB — คืน True/False ไม่ throw"""
     return pwd_context.verify(plain_password, hashed_password)
 
 # ฟังก์ชันใหม่: สร้าง JWT Token (บัตรผ่าน)
 def create_access_token(data: dict):
+    """สร้าง JWT: ก๊อปข้อมูล + ใส่เวลาหมดอายุ(exp) + เซ็นด้วย SECRET_KEY"""
     to_encode = data.copy()
     # กำหนดวันหมดอายุของบัตร
     expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)

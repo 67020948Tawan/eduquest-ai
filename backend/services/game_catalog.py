@@ -100,6 +100,7 @@ DEFAULT_RESOURCES = {"gold": 0, "wood": 0, "stone": 0, "crystal": 0, "knowledge"
 
 
 def default_game_state(max_hp: int | None = None) -> dict:
+    """state เริ่มต้นของ session ใหม่: HP เต็ม, combo 0, ทรัพยากร 0, ยังไม่มีอาคาร"""
     return {
         "hp": max_hp or COMBAT["base_max_hp"],
         "max_hp": max_hp or COMBAT["base_max_hp"],
@@ -246,6 +247,7 @@ def compute_correct_rewards(game_state: dict, difficulty: str = "easy", combo: i
 
 
 def apply_resources(game_state: dict, rewards: dict) -> None:
+    """บวกทรัพยากรเข้า state (กันติดลบ) — แก้ dict ต้นฉบับโดยตรง"""
     res = game_state.setdefault("resources", dict(DEFAULT_RESOURCES))
     for key, amount in rewards.items():
         if key in RESOURCES:
@@ -253,9 +255,11 @@ def apply_resources(game_state: dict, rewards: dict) -> None:
 
 
 def can_afford(resources: dict, cost: dict) -> bool:
+    """เช็คว่ามีทรัพยากรพอจ่าย cost ไหม (เช็กก่อน deduct เสมอ)"""
     return all(resources.get(k, 0) >= v for k, v in cost.items())
 
 
 def deduct_cost(resources: dict, cost: dict) -> None:
+    """หักทรัพยากรตาม cost — เรียกหลัง can_afford() ผ่านแล้วเท่านั้น"""
     for k, v in cost.items():
         resources[k] = resources.get(k, 0) - v
