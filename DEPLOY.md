@@ -8,6 +8,20 @@ Backend  (Render)  →  https://eduquest-api.onrender.com
 Database (Neon)    →  Postgres cloud
 ```
 
+### ✅ สถานะ deploy จริง (อัปเดต 6 ต.ค. 2026)
+
+| ส่วน | URL / ที่อยู่ | หมายเหตุ |
+|---|---|---|
+| Frontend | `https://frontend-olive-nine-n2kgq6d5zd.vercel.app` | Vercel ทีม `tawan3` — env `NEXT_PUBLIC_API_URL` ชี้ Render |
+| Backend | `https://eduquest-api-natl.onrender.com` | Render free plan (Singapore) — auto-deploy เมื่อ push ลง `main` |
+| Database | Neon `eduquest-ai` (pooler) | `DATABASE_URL` ต้องใช้ `postgresql+asyncpg://...?ssl=require` |
+| Keep-alive | `.github/workflows/keepalive.yml` | ping ทุก 10 นาที กัน free plan หลับ |
+| Repo แบบเก่า | `frontend-mikuo.vercel.app` (ทีม mikuo) | เจ้าของเดิมเลิกใช้ / เข้าไม่ถึงแล้ว |
+
+- CORS ตั้งผ่าน env `CORS_ORIGINS` บน Render (คั่นด้วย `,`) — เพิ่ม domain ใหม่ทุกครั้งที่เปลี่ยนโดเมน แล้ว redeploy
+- Deploy frontend จาก local: อยู่ในโฟลเดอร์ `frontend` แล้ว `npx vercel deploy --prod --yes --token <TOKEN>`
+- ส่วน GitHub auto-deploy ฝั่ง frontend ต้อง grant repo ให้แอป Vercel ก่อน (ยังไม่ได้เปิด)
+
 ---
 
 ## STEP 0 — Push โค้ดขึ้น GitHub
