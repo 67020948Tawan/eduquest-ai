@@ -4,11 +4,19 @@ import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import SiteHeader from "@/components/SiteHeader";
-import { demoLogin, loginRequest, registerRequest } from "@/lib/api";
+import {
+  demoLogin,
+  hasQuickLogin,
+  loginRequest,
+  quickTeacherLogin,
+  registerRequest,
+} from "@/lib/api";
 
 // ปุ่ม Demo แสดงเฉพาะตอน dev ในเครื่องครู — production ต้องไม่โชว์
 // (ทุกคนกด Demo = ใช้บัญชีเดียวกัน = เล่นทับ session เดียวกัน)
 const SHOW_DEMO = process.env.NODE_ENV !== "production";
+// ปุ่มครูล็อกอินอัตโนมัติ — แสดงเมื่อตั้ง env NEXT_PUBLIC_QUICK_LOGIN_* ไว้
+const SHOW_QUICK = hasQuickLogin();
 
 function LoginInner() {
   const router = useRouter();
@@ -71,6 +79,19 @@ function LoginInner() {
       router.push("/dashboard");
     } else {
       setError("เข้า Demo ไม่สำเร็จ — Backend เปิดอยู่ไหม?");
+      setManualBusy(false);
+    }
+  }
+
+  async function handleQuick() {
+    setError(null);
+    setManualBusy(true);
+    const ok = await quickTeacherLogin();
+    if (ok) {
+      router.push("/dashboard");
+      router.refresh();
+    } else {
+      setError("เข้าสู่ระบบครูไม่สำเร็จ — ลองใหม่ หรือล็อกอินเอง");
       setManualBusy(false);
     }
   }
@@ -153,7 +174,7 @@ function LoginInner() {
             </button>
           </form>
 
-          {SHOW_DEMO && (
+          {(SHOW_QUICK || SHOW_DEMO) && (
             <>
               <div className="my-6 flex items-center gap-3 text-xs text-slate-600">
                 <span className="h-px flex-1 bg-slate-800" />
@@ -162,11 +183,13 @@ function LoginInner() {
               </div>
 
               <button
-                onClick={handleDemo}
+                onClick={SHOW_QUICK ? handleQuick : handleDemo}
                 disabled={busy}
                 className="w-full rounded-lg border border-emerald-800/60 bg-emerald-950/30 py-3 font-medium text-emerald-400 transition hover:bg-emerald-950/60 disabled:opacity-50"
               >
-                🎮 เข้าใช้งานด้วย Demo Account
+                {SHOW_QUICK
+                  ? "👩‍🏫 ครู — เข้าสู่ระบบอัตโนมัติ"
+                  : "🎮 เข้าใช้งานด้วย Demo Account"}
               </button>
             </>
           )}

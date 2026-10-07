@@ -169,6 +169,27 @@ export async function demoLogin(): Promise<boolean> {
   }
 }
 
+// Quick Teacher Login — ปุ่มล็อกอินครูอัตโนมัติ
+// ค่ามาจาก env บน Vercel (NEXT_PUBLIC_QUICK_LOGIN_*) — ไม่ hardcode ในโค้ด
+// ตั้งตอน build: ถ้าไม่มีค่า ปุ่มจะไม่แสดง
+const QUICK_EMAIL = process.env.NEXT_PUBLIC_QUICK_LOGIN_EMAIL;
+const QUICK_PASSWORD = process.env.NEXT_PUBLIC_QUICK_LOGIN_PASSWORD;
+
+export function hasQuickLogin(): boolean {
+  return Boolean(QUICK_EMAIL && QUICK_PASSWORD);
+}
+
+export async function quickTeacherLogin(): Promise<boolean> {
+  if (!QUICK_EMAIL || !QUICK_PASSWORD) return false;
+  try {
+    await loginRequest(QUICK_EMAIL, QUICK_PASSWORD);
+    return true;
+  } catch (err) {
+    console.error("Quick teacher login failed:", err);
+    return false;
+  }
+}
+
 // ------------------------------------------------------------------------------
 // Courses
 // ------------------------------------------------------------------------------
