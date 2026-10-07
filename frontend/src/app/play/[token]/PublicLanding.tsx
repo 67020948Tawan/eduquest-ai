@@ -70,7 +70,12 @@ export default function PublicLanding() {
   }
 
   return (
-    <LandingBody data={data} onPlay={() => router.push(`/courses/${data.course_id}/preview?guest=1`)} />
+    <LandingBody
+      data={data}
+      // fresh=1 → ทุกครั้งที่กด PLAY NOW จากลิงก์/QR = เริ่มรอบใหม่ทันที
+      // (ไม่ resume ของคนก่อนหน้าบนเครื่อง/บัญชีเดียวกัน)
+      onPlay={() => router.push(`/courses/${data.course_id}/preview?guest=1&fresh=1`)}
+    />
   );
 }
 
@@ -159,7 +164,8 @@ function LandingBody({
         </button>
 
         <p className="mt-4 text-xs text-slate-500">
-          เล่นได้ทันทีไม่ต้องติดตั้งแอป · progress จะถูกบันทึกไว้ในอุปกรณ์นี้
+          เล่นได้ทันทีไม่ต้องติดตั้งแอป · ไม่ต้องสมัคร (แยกกันทุกเครื่อง) ·
+          กด PLAY NOW ใหม่ = เริ่มรอบใหม่เสมอ
         </p>
       </main>
     </div>

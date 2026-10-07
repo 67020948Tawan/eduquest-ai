@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useParams, useSearchParams } from "next/navigation";
+import { useParams, useSearchParams, useRouter } from "next/navigation";
 import SiteHeader from "@/components/SiteHeader";
 import { PixelSprite, PixelScene, BattleStage, type BattlePhase } from "@/components/PixelArt";
 import BasePanel from "@/components/game/BasePanel";
@@ -50,6 +50,9 @@ function CoursePlayInner() {
   const courseId = Number(params.id);
   // Guest mode: เปิดจาก public link — ไม่ต้อง login (progress เก็บผ่าน X-Player-Key)
   const isGuest = searchParams.get("guest") === "1";
+  // fresh=1 มาจากลิงก์/QR (PLAY NOW) → เริ่มรอบใหม่เสมอ "เข้า 1 ครั้ง = 1 ครั้ง"
+  const forceFresh = searchParams.get("fresh") === "1";
+  const router = useRouter();
   const authToken = useAuthToken();
   const token = isGuest ? "guest" : authToken;
 
@@ -116,10 +119,17 @@ function CoursePlayInner() {
   useEffect(() => {
     if (!courseId || token === null) return;
 
-    Promise.all([getCourseStructure(courseId), startSession(courseId)])
+    Promise.all([
+      getCourseStructure(courseId),
+      startSession(courseId, forceFresh ? { fresh: true } : {}),
+    ])
       .then(([structure, session]) => {
         setData(structure);
         hydrateSession(session);
+        // เอา fresh ออกจาก URL ทันที — กัน refresh ระหว่างเล่นแล้วโดนเริ่มใหม่
+        if (forceFresh) {
+          router.replace(`/courses/${courseId}/preview${isGuest ? "?guest=1" : ""}`);
+        }
       })
       .catch((err) => setError(err instanceof Error ? err.message : "โหลดเกมไม่สำเร็จ"))
       .finally(() => setLoading(false));
