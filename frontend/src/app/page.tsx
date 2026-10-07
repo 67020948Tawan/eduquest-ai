@@ -105,12 +105,6 @@ export default function Home() {
                   🚀 เริ่มสร้างเกมฟรี
                 </Link>
                 <Link
-                  href="/login?demo=1"
-                  className="rounded-2xl border border-slate-700 px-7 py-4 text-base font-semibold text-slate-300 transition hover:border-indigo-500/60 hover:bg-slate-900 hover:text-white"
-                >
-                  🎮 ลอง Demo ทันที
-                </Link>
-                <Link
                   href="/join"
                   className="rounded-2xl border border-amber-700/60 px-7 py-4 text-base font-semibold text-amber-300 transition hover:border-amber-500 hover:bg-amber-950/30 hover:text-amber-200"
                 >
