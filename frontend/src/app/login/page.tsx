@@ -6,6 +6,10 @@ import { useRouter, useSearchParams } from "next/navigation";
 import SiteHeader from "@/components/SiteHeader";
 import { demoLogin, loginRequest, registerRequest } from "@/lib/api";
 
+// ปุ่ม Demo แสดงเฉพาะตอน dev ในเครื่องครู — production ต้องไม่โชว์
+// (ทุกคนกด Demo = ใช้บัญชีเดียวกัน = เล่นทับ session เดียวกัน)
+const SHOW_DEMO = process.env.NODE_ENV !== "production";
+
 function LoginInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -25,7 +29,7 @@ function LoginInner() {
 
   // ?demo=1 → auto demo login (setState ทั้งหมดอยู่ใน async callback)
   useEffect(() => {
-    if (searchParams.get("demo") !== "1") return;
+    if (!SHOW_DEMO || searchParams.get("demo") !== "1") return;
     let cancelled = false;
     demoLogin().then((ok) => {
       if (cancelled) return;
@@ -149,19 +153,23 @@ function LoginInner() {
             </button>
           </form>
 
-          <div className="my-6 flex items-center gap-3 text-xs text-slate-600">
-            <span className="h-px flex-1 bg-slate-800" />
-            หรือ
-            <span className="h-px flex-1 bg-slate-800" />
-          </div>
+          {SHOW_DEMO && (
+            <>
+              <div className="my-6 flex items-center gap-3 text-xs text-slate-600">
+                <span className="h-px flex-1 bg-slate-800" />
+                หรือ
+                <span className="h-px flex-1 bg-slate-800" />
+              </div>
 
-          <button
-            onClick={handleDemo}
-            disabled={busy}
-            className="w-full rounded-lg border border-emerald-800/60 bg-emerald-950/30 py-3 font-medium text-emerald-400 transition hover:bg-emerald-950/60 disabled:opacity-50"
-          >
-            🎮 เข้าใช้งานด้วย Demo Account
-          </button>
+              <button
+                onClick={handleDemo}
+                disabled={busy}
+                className="w-full rounded-lg border border-emerald-800/60 bg-emerald-950/30 py-3 font-medium text-emerald-400 transition hover:bg-emerald-950/60 disabled:opacity-50"
+              >
+                🎮 เข้าใช้งานด้วย Demo Account
+              </button>
+            </>
+          )}
 
           <Link
             href="/join"
