@@ -68,8 +68,8 @@ interface PixelParticlesProps {
 export function PixelParticles({
   count = 24,
   color = "#ffd75e",
-  centerX = 0,
-  centerY = 0,
+  centerX,
+  centerY,
   spread = 40,
   duration = 900,
   autoHide = true,
@@ -90,8 +90,8 @@ export function PixelParticles({
     const W = canvas.width;
     const H = canvas.height;
     const rng = seedRef.current;
-    const cx = centerX || W / 2;
-    const cy = centerY || H / 2;
+    const cx = centerX ?? W / 2;
+    const cy = centerY ?? H / 2;
 
     // รีเซ็ตอนุภาค
     const ps: Particle[] = [];
