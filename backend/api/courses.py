@@ -77,6 +77,9 @@ async def create_course(
     difficulty: str = Form(None),
     game_modes: str = Form('["standard_quiz"]'),
     visual_style: str = Form("pixel_art"),
+    game_length: str = Form("medium"),
+    question_types: str = Form('["multiple_choice"]'),
+    questions_per_chapter: str = Form("3"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -87,6 +90,24 @@ async def create_course(
     except Exception:
         parsed_game_modes = ["standard_quiz"]
 
+    try:
+        parsed_question_types = json.loads(question_types)
+        if not isinstance(parsed_question_types, list):
+            raise ValueError
+    except Exception:
+        parsed_question_types = ["multiple_choice"]
+
+    try:
+        parsed_qpc = int(questions_per_chapter)
+        if parsed_qpc < 1:
+            parsed_qpc = 3
+    except Exception:
+        parsed_qpc = 3
+
+    valid_lengths = {"short", "medium", "long"}
+    if game_length not in valid_lengths:
+        game_length = "medium"
+
     new_course = Course(
         title=title.strip(),
         description=description,
@@ -94,6 +115,9 @@ async def create_course(
         difficulty=difficulty,
         game_modes=parsed_game_modes,
         visual_style=visual_style if visual_style in ("pixel_art", "modern_2d", "fantasy", "scifi") else "pixel_art",
+        game_length=game_length,
+        question_types=parsed_question_types,
+        questions_per_chapter=parsed_qpc,
         teacher_id=current_user.id,
         status=CourseStatus.DRAFT,
     )
@@ -239,6 +263,35 @@ async def analyze_course_content(
     }
 
 
+@router.post("/courses/{course_id}/analyze-content")
+async def analyze_content_sufficiency_endpoint(
+    course_id: int,
+    game_length: str = Form("medium"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    AI ตรวจสอบว่าเนื้อหาในเอกสารเพียงพอต่อความยาวเกมที่เลือกหรือไม่
+    """
+    await get_owned_course(course_id, current_user, db)
+    document = await get_latest_document(course_id, db)
+
+    valid_lengths = {"short", "medium", "long"}
+    if game_length not in valid_lengths:
+        game_length = "medium"
+
+    ai_result = await analyze_content_sufficiency(document.file_path, game_length=game_length)
+    if "error" in ai_result:
+        raise HTTPException(status_code=500, detail=ai_result["error"])
+
+    return {
+        "message": "AI ตรวจสอบความเพียงพอของเนื้อหาสำเร็จ",
+        "filename": document.filename,
+        "game_length": game_length,
+        "sufficiency": ai_result,
+    }
+
+
 @router.post("/courses/{course_id}/recommendations")
 async def recommend_genres(
     course_id: int,
@@ -259,6 +312,8 @@ async def generate_course(
     course_id: int,
     visual_style: str = Form(None),
     ai_instruction: str = Form(None),
+    game_length: str = Form(None),
+    question_types: str = Form(None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -267,6 +322,13 @@ async def generate_course(
 
     if visual_style:
         course.visual_style = visual_style
+    if game_length:
+        course.game_length = game_length
+    if question_types:
+        try:
+            course.question_types = json.loads(question_types)
+        except Exception:
+            pass
     course.status = CourseStatus.GENERATING
     await db.commit()
 
@@ -275,6 +337,8 @@ async def generate_course(
         game_modes=course.game_modes or ["standard_quiz"],
         visual_style=course.visual_style or "pixel_art",
         ai_instruction=ai_instruction,
+        game_length=course.game_length or "medium",
+        question_types=course.question_types or ["multiple_choice"],
     )
 
     if "error" in ai_result:
@@ -327,6 +391,10 @@ async def generate_course(
                 difficulty=q["difficulty"],
                 points=q["points"],
                 source_reference=q.get("source_reference"),
+                question_type=q.get("question_type", "multiple_choice"),
+                matching_pairs=q.get("matching_pairs"),
+                ordering_items=q.get("ordering_items"),
+                correct_data=q.get("correct_data"),
             ))
         created_chapter_ids.append({"chapter_id": new_chapter.id, "index": idx})
 
@@ -592,6 +660,10 @@ def _build_structure_payload(course: Course, chapters, levels, badges) -> dict:
                     "difficulty": q.difficulty,
                     "points": q.points,
                     "source_reference": q.source_reference,
+                    "question_type": q.question_type,
+                    "matching_pairs": q.matching_pairs,
+                    "ordering_items": q.ordering_items,
+                    "correct_data": q.correct_data,
                     # ❗ ไม่ส่ง correct_answer_index ไป frontend — กันโกง (anti-cheat)
                 }
                 for q in ch.quiz_questions

@@ -19,7 +19,12 @@ class User(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     password_hash = Column(String, nullable=False)
     role = Column(Enum(UserRole), default=UserRole.STUDENT)
-    
+
+    # 🔥 Streak / เกมมิฟิเคชัน (Hook Model — Investment)
+    current_streak = Column(Integer, default=0)
+    longest_streak = Column(Integer, default=0)
+    last_played_at = Column(DateTime(timezone=True), nullable=True)
+
     # เก็บเวลาที่สร้างและอัปเดตอัตโนมัติ
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

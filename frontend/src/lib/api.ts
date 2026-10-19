@@ -196,6 +196,8 @@ export async function quickTeacherLogin(): Promise<boolean> {
 
 export type CourseStatus = "DRAFT" | "GENERATING" | "READY" | "PUBLISHED" | "ARCHIVED";
 export type VisualStyle = "pixel_art" | "modern_2d" | "fantasy" | "scifi";
+export type GameLength = "short" | "medium" | "long";
+export type QuestionType = "multiple_choice" | "true_false" | "matching" | "ordering";
 
 export interface CourseSummary {
   id: number;
@@ -218,6 +220,9 @@ export interface CreateCoursePayload {
   difficulty?: string;
   gameModes: string[];
   visualStyle: VisualStyle;
+  gameLength?: GameLength;
+  questionTypes?: QuestionType[];
+  questionsPerChapter?: number;
 }
 
 export async function createCourse(payload: CreateCoursePayload) {
@@ -228,6 +233,9 @@ export async function createCourse(payload: CreateCoursePayload) {
   formData.append("difficulty", payload.difficulty ?? "");
   formData.append("game_modes", JSON.stringify(payload.gameModes));
   formData.append("visual_style", payload.visualStyle);
+  formData.append("game_length", payload.gameLength ?? "medium");
+  formData.append("question_types", JSON.stringify(payload.questionTypes ?? ["multiple_choice"]));
+  formData.append("questions_per_chapter", String(payload.questionsPerChapter ?? 3));
   return request<CourseSummary>("/api/courses", { method: "POST", body: formData });
 }
 
@@ -344,11 +352,18 @@ export interface GenerateResult {
 
 export async function generateGame(
   courseId: number,
-  opts: { visualStyle?: VisualStyle; aiInstruction?: string } = {}
+  opts: {
+    visualStyle?: VisualStyle;
+    aiInstruction?: string;
+    gameLength?: GameLength;
+    questionTypes?: QuestionType[];
+  } = {}
 ): Promise<GenerateResult> {
   const formData = new FormData();
   if (opts.visualStyle) formData.append("visual_style", opts.visualStyle);
   if (opts.aiInstruction) formData.append("ai_instruction", opts.aiInstruction);
+  if (opts.gameLength) formData.append("game_length", opts.gameLength);
+  if (opts.questionTypes) formData.append("question_types", JSON.stringify(opts.questionTypes));
   return request<GenerateResult>(`/api/courses/${courseId}/generate`, {
     method: "POST",
     body: formData,
@@ -357,6 +372,32 @@ export async function generateGame(
 
 export const generateCourse = generateGame;
 export const generateGamification = generateGame;
+
+export interface ContentSufficiency {
+  sufficient: boolean;
+  level: "sufficient" | "borderline" | "insufficient";
+  estimated_questions: number;
+  recommended_length: GameLength;
+  warnings: string[];
+  suggestions: string[];
+}
+
+export async function analyzeContentSufficiency(
+  courseId: number,
+  gameLength: GameLength = "medium"
+): Promise<ContentSufficiency> {
+  const formData = new FormData();
+  formData.append("game_length", gameLength);
+  return request<{
+    message: string;
+    filename: string;
+    game_length: GameLength;
+    sufficiency: ContentSufficiency;
+  }>(`/api/courses/${courseId}/analyze-content`, {
+    method: "POST",
+    body: formData,
+  }).then((r) => r.sufficiency);
+}
 
 // ------------------------------------------------------------------------------
 // Course Structure (public read)
@@ -370,6 +411,10 @@ export interface QuizQuestionView {
   difficulty: string;
   points: number;
   source_reference: string | null;
+  question_type: QuestionType;
+  matching_pairs: Array<{ left: string; right: string }> | null;
+  ordering_items: string[] | null;
+  correct_data: Record<string, string> | string[] | null;
 }
 
 export interface LessonView {
@@ -541,7 +586,11 @@ export async function startSession(
 export interface AnswerResult {
   already_answered: boolean;
   correct: boolean;
+  question_type: QuestionType;
   correct_answer_index: number | null;
+  correct_data: Record<string, string> | string[] | null;
+  matching_pairs: Array<{ left: string; right: string }> | null;
+  ordering_items: string[] | null;
   explanation?: string;
   source_reference?: string | null;
   points?: number;
@@ -555,15 +604,21 @@ export interface AnswerResult {
   raid_expired?: string | null;
 }
 
+export interface AnswerSubmitPayload {
+  question_id: number;
+  answer_index?: number;
+  matching?: Record<string, string>;
+  ordering?: number[];
+}
+
 export async function submitAnswer(
   sessionId: number,
-  questionId: number,
-  answerIndex: number
+  payload: AnswerSubmitPayload
 ): Promise<AnswerResult> {
   return request<AnswerResult>(`/api/sessions/${sessionId}/answer`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question_id: questionId, answer_index: answerIndex }),
+    body: JSON.stringify(payload),
   });
 }
 

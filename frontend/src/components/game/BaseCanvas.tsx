@@ -10,7 +10,7 @@
 // • Workers เดินบนถนน + production popups + นก
 // ==============================================================================
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { drawBuilding, getTheme, hashString, mulberry32 } from "@/components/PixelArt";
 
 const W = 128;
@@ -45,7 +45,7 @@ export default function BaseCanvas({
 }: {
   buildings: string[];
   style?: string;
-  /** {buildingId: {gold: 12}} — bubble เหนืออาคาร */
+  /** {buildingId: {gold: 12}} — bubble เห�นอาคาร */
   pendingByBuilding?: Record<string, Record<string, number>>;
   /** ชื่อผู้บุก (raid active) */
   raidName?: string | null;
@@ -53,6 +53,8 @@ export default function BaseCanvas({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const buildingsKey = buildings.join(",");
   const pendingKey = JSON.stringify(pendingByBuilding);
+  const prevPendingRef = useRef<Record<string, Record<string, number>>>({});
+  const [collectBurst, setCollectBurst] = useState<{ x: number; y: number; start: number } | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -214,6 +216,26 @@ export default function BaseCanvas({
 
       const nowPending = pendingMap; // snapshot จาก prop ล่าสุดของ effect run นี้
 
+      // ตรวจจับการเก็บผลผลิต: pending ลดลง = เพิ่งกดเก็บ
+      const totalPending = (pm: Record<string, Record<string, number>>) =>
+        Object.values(pm).reduce(
+          (a, b) => a + Object.values(b ?? {}).reduce((s, v) => s + (v ?? 0), 0),
+          0
+        );
+      const prevTotal = totalPending(prevPendingRef.current);
+      const currTotal = totalPending(pendingMap);
+      if (currTotal < prevTotal && currTotal >= 0) {
+        const producers = built.filter((id) => YIELD_ICON[id] && pendingMap[id]);
+        if (producers.length > 0) {
+          const id = producers[Math.floor(Math.random() * producers.length)];
+          const p = PLOTS[id];
+          if (p) {
+            setCollectBurst({ x: p.x, y: p.y - 36, start: Date.now() });
+          }
+        }
+      }
+      prevPendingRef.current = pendingMap;
+
       // ---------- Building animations ----------
       for (const id of built) {
         const p = PLOTS[id];
@@ -299,6 +321,30 @@ export default function BaseCanvas({
         const size = s.life > 35 ? 2 : 3;
         ctx.fillRect(Math.round(s.x), Math.round(s.y), size, size);
         if (s.life <= 0) smokes.splice(i, 1);
+      }
+
+      // Collect burst particles
+      if (collectBurst) {
+        const elapsed = Date.now() - collectBurst.start;
+        if (elapsed < 600) {
+          const rng = mulberry32(hashString(`collect-${collectBurst.start}`));
+          const progress = elapsed / 600;
+          const particleCount = 12;
+          for (let i = 0; i < particleCount; i++) {
+            const angle = rng() * Math.PI * 2;
+            const speed = rng() * 3 + 1;
+            const dist = speed * (elapsed / 20);
+            const px = collectBurst.x + Math.cos(angle) * dist;
+            const py = collectBurst.y - Math.sin(angle) * dist - progress * 25;
+            const alpha = 1 - progress;
+            ctx.globalAlpha = alpha;
+            ctx.fillStyle = "#ffd75e";
+            ctx.fillRect(Math.round(px), Math.round(py), 2, 2);
+            ctx.globalAlpha = 1;
+          }
+        } else {
+          setCollectBurst(null);
+        }
       }
 
       // ---------- Workers ----------
@@ -431,7 +477,9 @@ export default function BaseCanvas({
   }, [buildingsKey, pendingKey, style]);
 
   return (
-    <div className="relative overflow-hidden rounded-2xl border-2 border-slate-700 shadow-xl shadow-slate-950/50">
+    <div
+      className={`relative overflow-hidden rounded-2xl border-2 border-slate-700 shadow-xl shadow-slate-950/50 ${raidName ? "eq-shake" : ""}`}
+    >
       <canvas
         ref={canvasRef}
         width={W}

@@ -9,12 +9,14 @@
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from typing import Optional, Dict, Any, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 
 from database import get_db
 from models.user import User
+from models.user_badge import UserBadge
 from models.course import Course, CourseStatus
 from models.chapter import Chapter
 from models.quiz_question import QuizQuestion
@@ -48,13 +50,104 @@ def _now_ms() -> int:
     return int(_time.time() * 1000)
 
 
+def _today_utc() -> str:
+    """คืนวันที่วันนี้ในรูปแบบ YYYY-MM-DD (UTC) สำหรับเปรียบเทียบ streak"""
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def _calculate_streak(user: User, played_today: bool = True) -> tuple[int, int, bool]:
+    """
+    คำนวณ streak ใหม่เมื่อผู้ใช้เล่นเกม
+    คืน (current_streak, longest_streak, streak_increased)
+    """
+    today = _today_utc()
+    last_played = user.last_played_at.strftime("%Y-%m-%d") if user.last_played_at else None
+
+    current_streak = user.current_streak or 0
+    longest_streak = user.longest_streak or 0
+    streak_increased = False
+
+    if last_played == today:
+        # เล่นแล้ววันนี้ — streak ไม่เปลี่ยน
+        pass
+    elif last_played is None:
+        # เล่นครั้งแรก
+        current_streak = 1
+        streak_increased = True
+    else:
+        # เล่นวันอื่น — ต่อ streak ถ้าเล่นเมื่อวาน หรือ reset เป็น 1
+        from datetime import datetime, timezone, timedelta
+        last_date = datetime.strptime(last_played, "%Y-%m-%d").date()
+        today_date = datetime.strptime(today, "%Y-%m-%d").date()
+        if (today_date - last_date).days == 1:
+            current_streak += 1
+            streak_increased = True
+        else:
+            current_streak = 1
+            streak_increased = True  # เริ่ม streak ใหม่ก็นับเป็นการเพิ่ม
+
+    if current_streak > longest_streak:
+        longest_streak = current_streak
+
+    return current_streak, longest_streak, streak_increased
+
+
+async def _persist_earned_badges(
+    user: User,
+    course_id: int,
+    earned_badges: list[dict],
+    db: AsyncSession,
+) -> list[dict]:
+    """บันทึก badge ที่ได้รับใหม่ลง user_badges (กันซ้ำ)"""
+    if not earned_badges:
+        return []
+
+    # ดึง badge ids ที่มีอยู่แล้ว
+    existing = await db.execute(
+        select(UserBadge.badge_id).where(
+            UserBadge.user_id == user.id,
+            UserBadge.course_id == course_id,
+        )
+    )
+    existing_ids = {row[0] for row in existing.all()}
+
+    persisted = []
+    for badge_info in earned_badges:
+        # badge_info = {"name": ..., "description": ...} — ต้องหา badge_id จากชื่อ
+        bd_result = await db.execute(
+            select(Badge).where(
+                Badge.course_id == course_id,
+                Badge.name == badge_info["name"],
+            )
+        )
+        bd = bd_result.scalars().first()
+        if not bd or bd.id in existing_ids:
+            continue
+
+        db.add(UserBadge(
+            user_id=user.id,
+            badge_id=bd.id,
+            course_id=course_id,
+        ))
+        existing_ids.add(bd.id)
+        persisted.append(badge_info)
+
+    return persisted
+
+
 # ------------------------------------------------------------------------------
 # Schemas
 # ------------------------------------------------------------------------------
 
 class AnswerSubmit(BaseModel):
     question_id: int
-    answer_index: int = Field(ge=0, le=5)
+    # multiple_choice / true_false → index ของตัวเลือก
+    answer_index: Optional[int] = Field(default=None, ge=0, le=5)
+    # matching → {"left_id": "right_id", ...}
+    matching: Optional[Dict[str, str]] = None
+    # ordering → [index, index, ...] ตามลำดับที่ผู้เล่นเรียง
+    ordering: Optional[List[int]] = None
 
 
 class ChapterComplete(BaseModel):
@@ -297,8 +390,19 @@ async def start_or_resume_session(
     expire_msg = _resolve_raid_expiry(state)
     _maybe_trigger_raid(state, modes)
     session.game_state = sanitize_game_state(state)
+
+    # 🔥 Gamification: อัปเดต streak ของ user (Hook Model — Investment)
+    from datetime import datetime, timezone
+    now_utc = datetime.now(timezone.utc)
+    current_user.last_played_at = now_utc
+    new_streak, new_longest, streak_increased = _calculate_streak(current_user)
+    current_user.current_streak = new_streak
+    current_user.longest_streak = new_longest
+
+    session.game_state = sanitize_game_state(state)
     await db.commit()
     await db.refresh(session)
+    await db.refresh(current_user)
 
     return {
         "session_id": session.id,
@@ -315,6 +419,10 @@ async def start_or_resume_session(
         "pending_per_building": _pending_per_building(session.game_state or {}),
         "raid": (session.game_state or {}).get("raid"),
         "notice": expire_msg,
+        # Streak info
+        "current_streak": current_user.current_streak,
+        "longest_streak": current_user.longest_streak,
+        "streak_increased": streak_increased,
     }
 
 
@@ -364,7 +472,11 @@ async def submit_answer(
         return {
             "already_answered": True,
             "correct": prev.get("correct", False),
+            "question_type": q_old.question_type if q_old else None,
             "correct_answer_index": q_old.correct_answer_index if q_old else None,
+            "correct_data": q_old.correct_data if q_old else None,
+            "matching_pairs": q_old.matching_pairs if q_old else None,
+            "ordering_items": q_old.ordering_items if q_old else None,
             "explanation": q_old.explanation if q_old else None,
             "source_reference": q_old.source_reference if q_old else None,
             "xp_awarded": 0,
@@ -379,7 +491,22 @@ async def submit_answer(
     modes = await _course_modes(db, session.course_id)
     state = _ensure_state(session, modes)
 
-    is_correct = payload.answer_index == question.correct_answer_index
+    # ---- ตรวจคำตอบแยกตามประเภทคำถาม (server-side anti-cheat) ----
+    q_type = question.question_type or "multiple_choice"
+    is_correct = False
+
+    if q_type in ("multiple_choice", "true_false"):
+        is_correct = (payload.answer_index is not None
+                      and payload.answer_index == question.correct_answer_index)
+    elif q_type == "matching":
+        correct_map = question.correct_data or {}
+        submitted_map = payload.matching or {}
+        is_correct = submitted_map == correct_map
+    elif q_type == "ordering":
+        correct_order = question.correct_data or []
+        submitted_order = payload.ordering or []
+        is_correct = submitted_order == correct_order
+
     xp_awarded = question.points if is_correct else 0
     resources_awarded = {}
     enemy_damage = 0
@@ -428,7 +555,11 @@ async def submit_answer(
     return {
         "already_answered": False,
         "correct": is_correct,
+        "question_type": question.question_type,
         "correct_answer_index": question.correct_answer_index,
+        "correct_data": question.correct_data,
+        "matching_pairs": question.matching_pairs,
+        "ordering_items": question.ordering_items,
         "explanation": question.explanation,
         "source_reference": question.source_reference,
         "points": question.points,
@@ -522,8 +653,11 @@ async def complete_chapter(
             earned = True
         elif checkpoint_bonus > 0 and len(completed) >= 1 and ("first" in hint or "begin" in hint or "start" in hint):
             earned = True
-        if earned:
-            earned_badges.append({"name": name, "description": bd.description})
+    if earned:
+        earned_badges.append({"name": name, "description": bd.description})
+
+    # 🔥 Persist badges ที่ได้รับใหม่ลง user_badges (กันซ้ำ)
+    new_badges = await _persist_earned_badges(current_user, course_id, earned_badges, db)
 
     await db.commit()
     return {
@@ -532,11 +666,14 @@ async def complete_chapter(
         "bonus_xp": checkpoint_bonus,
         "total_xp": session.xp,
         "level": level_info,
-        "badges_earned": earned_badges,
+        "badges_earned": new_badges,
         "completed_chapters": completed,
         "progress_percent": round(len(completed) / total_chapters * 100) if total_chapters else 0,
         "chapter_rewards": chapter_rewards,
         "game_state": session.game_state or {},
+        # Streak info
+        "current_streak": current_user.current_streak,
+        "longest_streak": current_user.longest_streak,
     }
 
 
@@ -747,6 +884,15 @@ async def finish_session(
     needs_practice = [c["chapter"] for c in learning_coverage if c["mastery_percent"] < 60]
 
     session.status = "completed"
+
+    # 🔥 อัปเดต streak เมื่อจบเกม
+    from datetime import datetime, timezone
+    now_utc = datetime.now(timezone.utc)
+    current_user.last_played_at = now_utc
+    new_streak, new_longest, streak_increased = _calculate_streak(current_user)
+    current_user.current_streak = new_streak
+    current_user.longest_streak = new_longest
+
     await db.commit()
 
     return {
@@ -764,6 +910,10 @@ async def finish_session(
         "questions_total": total_questions_in_course,
         "questions_attempted": total_answered,
         "questions_correct": total_correct,
+        # Streak info
+        "current_streak": current_user.current_streak,
+        "longest_streak": current_user.longest_streak,
+        "streak_increased": streak_increased,
     }
 
 

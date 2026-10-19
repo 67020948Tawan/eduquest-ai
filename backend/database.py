@@ -41,16 +41,30 @@ _MISSING_COLUMN_DEFAULTS = {
         "share_token": "VARCHAR UNIQUE",
         "share_code": "VARCHAR UNIQUE",
         "access_mode": "VARCHAR DEFAULT 'private'",
+        "game_length": "VARCHAR DEFAULT 'medium'",
+        "question_types": "JSON DEFAULT '[\"multiple_choice\"]'",
+        "questions_per_chapter": "INTEGER DEFAULT 3",
+    },
+    "users": {
+        "current_streak": "INTEGER DEFAULT 0",
+        "longest_streak": "INTEGER DEFAULT 0",
+        "last_played_at": "TIMESTAMP WITHOUT TIME ZONE",
     },
     "game_sessions": {
         "game_state": "JSON DEFAULT '{}'",
+    },
+    "quiz_questions": {
+        "question_type": "VARCHAR DEFAULT 'multiple_choice'",
+        "matching_pairs": "JSON",
+        "ordering_items": "JSON",
+        "correct_data": "JSON",
     },
 }
 
 
 async def init_db() -> None:
     """รันตอน backend start: สร้างตารางที่ยังไม่มี + ALTER เติมคอลัมน์ใหม่ตาม _MISSING_COLUMN_DEFAULTS"""
-    from models import user, course, document, chapter, lesson, quiz_question, level, badge, game_session  # noqa: F401
+    from models import user, course, document, chapter, lesson, quiz_question, level, badge, game_session, user_badge  # noqa: F401
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

@@ -6,7 +6,7 @@
 # ==============================================================================
 
 from pydantic import BaseModel, Field, field_validator
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 
 # ------------------------------------------------------------------------------
@@ -28,12 +28,32 @@ class QuizQuestionAI(BaseModel):
     source_reference: str             # อ้างอิงว่ามาจากส่วนไหนของเอกสาร
     concept: Optional[str] = None     # Concept ที่คำถามนี้วัด
 
+    # 🎯 ประเภทคำถาม — multiple_choice | true_false | matching | ordering
+    question_type: str = "multiple_choice"
+
+    # 🔗 สำหรับ matching — [{"left": "...", "right": "..."}, ...]
+    matching_pairs: Optional[List[Dict[str, str]]] = None
+
+    # 🔢 สำหรับ ordering — ["item1", "item2", ...] (ลำดับที่ AI สุ่มไว้ก่อน)
+    ordering_items: Optional[List[str]] = None
+
+    # ✅ สำหรับ matching/ordering — เก็บคำตอบที่ถูก (รูปแบบยืดหยุ่นตามประเภท)
+    correct_data: Optional[Dict[str, Any]] = None
+
     @field_validator("correct_answer_index")
     @classmethod
     def answer_index_in_range(cls, v, info):
         options = info.data.get("options") or []
         if options and v >= len(options):
             raise ValueError("correct_answer_index ต้องชี้ไปที่ option ที่มีอยู่จริง")
+        return v
+
+    @field_validator("question_type")
+    @classmethod
+    def valid_question_type(cls, v):
+        allowed = {"multiple_choice", "true_false", "matching", "ordering"}
+        if v not in allowed:
+            raise ValueError(f"question_type ต้องเป็นหนึ่งใน {allowed}")
         return v
 
 
@@ -46,7 +66,7 @@ class LessonAI(BaseModel):
 class ChapterAI(BaseModel):
     title: str
     lesson: LessonAI
-    quiz_questions: List[QuizQuestionAI] = Field(min_length=3, max_length=6)
+    quiz_questions: List[QuizQuestionAI] = Field(min_length=1, max_length=8)
 
 
 # ------------------------------------------------------------------------------
@@ -129,7 +149,7 @@ class GamificationAI(BaseModel):
 class CourseGenerationAI(BaseModel):
     world_name: str
     world: WorldAI
-    chapters: List[ChapterAI] = Field(min_length=10, max_length=12)
+    chapters: List[ChapterAI] = Field(min_length=5, max_length=15)
     gamification: GamificationAI
     learning_objectives: List[str] = Field(default_factory=list)
 
@@ -138,3 +158,16 @@ class CourseGenerationAI(BaseModel):
             "description": "EduQuest AI game configuration generated from learning materials"
         }
     }
+
+
+# ------------------------------------------------------------------------------
+# Content Sufficiency Analysis — AI ตรวจสอบว่าเนื้อหาพอต่อความยาวเกมหรือไม่
+# ------------------------------------------------------------------------------
+
+class ContentSufficiencyAI(BaseModel):
+    sufficient: bool
+    level: str                              # "sufficient" | "borderline" | "insufficient"
+    estimated_questions: int                # จำนวนคำถามสูงสุดที่สร้างได้จากเนื้อหานี้
+    recommended_length: str                 # "short" | "medium" | "long"
+    warnings: List[str] = Field(default_factory=list)
+    suggestions: List[str] = Field(default_factory=list)

@@ -28,6 +28,15 @@ class Course(Base):
     # 🎨 Visual Style Bible (กฎข้อ #30) — pixel_art | modern_2d | fantasy | scifi
     visual_style = Column(String, default="pixel_art")
 
+    # ⏱️ ความยาวเกม — short | medium | long
+    game_length = Column(String, default="medium")
+
+    # 📋 ประเภทคำถามที่อนุญาต — multiple_choice | true_false | matching | ordering
+    question_types = Column(JSON, default=["multiple_choice"])
+
+    # 🔢 จำนวนคำถามต่อบท (คำนวณจาก game_length)
+    questions_per_chapter = Column(Integer, default=3)
+
     # 🌍 Game Configuration ทั้งหมดที่ AI generate (world/npcs/enemies/bosses)
     game_config = Column(JSON, nullable=True)
 

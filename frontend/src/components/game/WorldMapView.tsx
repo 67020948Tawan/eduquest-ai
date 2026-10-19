@@ -8,6 +8,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { PixelSprite } from "@/components/PixelArt";
+import { Confetti } from "@/components/game/PixelFx";
 
 export interface MapNode {
   key: string | number;
@@ -69,10 +70,13 @@ export default function WorldMapView({
   const [pos, setPos] = useState(pts[currentIdx] ?? { x: 50, y: 80 });
   const [walking, setWalking] = useState(false);
   const walkingRef = useRef(false);
+  const [unlockConfetti, setUnlockConfetti] = useState<{ idx: number; start: number } | null>(null);
 
-  // sync เมื่อ progress เปลี่ยนจากข้างนอก (จบด่านแล้วกลับมา)
+  // sync เมื่อ progress เปลี่ยนจากข้างนอก (จบด่านแล้วกลับมา) → เปิด coriandor ตรงโหนดนั้น
   useEffect(() => {
     if (!walkingRef.current) setPos(pts[currentIdx] ?? { x: 50, y: 80 });
+    // เปิด confetti เมื่อโหนดปัจจุบันเปลี่ยน (= เพิ่งผ่านด่านก่อนหน้า)
+    setUnlockConfetti({ idx: currentIdx, start: Date.now() });
   }, [currentIdx]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleNodeClick(i: number) {
@@ -208,6 +212,22 @@ export default function WorldMapView({
           <PixelSprite kind="hero" seed="player-hero" style={visualStyle} size={44} />
         </div>
       </div>
+
+      {/* Confetti ตอนปลดล็อกด่านใหม่ */}
+      {unlockConfetti && Date.now() - unlockConfetti.start < 1200 && (
+        <div
+          className="pointer-events-none absolute"
+          style={{
+            left: `${pts[unlockConfetti.idx]?.x ?? 50}%`,
+            top: `${pts[unlockConfetti.idx]?.y ?? 80}px`,
+            width: 0,
+            height: 0,
+            zIndex: 40,
+          }}
+        >
+          <Confetti count={50} duration={1200} />
+        </div>
+      )}
     </div>
   );
 }

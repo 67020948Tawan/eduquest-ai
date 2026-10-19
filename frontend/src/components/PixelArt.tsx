@@ -13,6 +13,7 @@
 // ==============================================================================
 
 import { useEffect, useRef } from "react";
+import { PixelParticles, DamageNumber, ScreenShake, Confetti, PixelFlash, PixelHitEffect } from "./game/PixelFx";
 
 // ------------------------------------------------------------------------------
 // Seeded RNG — deterministic ต่อชื่อ
@@ -915,6 +916,8 @@ export function BattleStage({
   playerHpRatio,
   phase = "idle",
   defeated = false,
+  onVictory,
+  onDamage,
 }: {
   environment: string;
   seed: string;
@@ -923,75 +926,372 @@ export function BattleStage({
   enemyKind: "enemy" | "boss";
   /** 0..1 */
   enemyHpRatio: number;
+  /** 0..1 */
   playerHpRatio: number;
   phase?: BattlePhase;
   /** enemy กำลังโดนกำจัด (animation) */
   defeated?: boolean;
+  onVictory?: () => void;
+  onDamage?: (amount: number) => void;
 }) {
+  const [shake, setShake] = React.useState(false);
+  const [showHit, setShowHit] = React.useState(false);
+  const [showVictory, setShowVictory] = React.useState(false);
+  const [dmgText, setDmgText] = React.useState<string | null>(null);
+  const [dmgPos, setDmgPos] = React.useState({ x: 0, y: 0 });
+
+  React.useEffect(() => {
+    if (phase === "hero_attack" || phase === "enemy_attack") {
+      setShake(true);
+      setShowHit(true);
+      setTimeout(() => setShake(false), 500);
+      setTimeout(() => setShowHit(false), 400);
+    }
+  }, [phase]);
+
+  React.useEffect(() => {
+    if (defeated && !showVictory) {
+      setShowVictory(true);
+      onVictory?.();
+    }
+  }, [defeated, showVictory, onVictory]);
+
+  const handleHitEnd = () => {
+    if (onDamage) {
+      const amt = Math.floor(10 + Math.random() * 15);
+      onDamage(amt);
+      setDmgText(`-${amt}`);
+      setDmgPos({ x: 46, y: 28 });
+      setTimeout(() => setDmgText(null), 900);
+    }
+  };
+
   return (
-    <div className="relative w-full overflow-hidden rounded-2xl border border-slate-700/80">
-      {/* ฉากหลัง animated (responsive เต็มความกว้าง) */}
-      <PixelScene
-        environment={environment}
-        seed={seed}
-        style={style}
-        animated
+    <ScreenShake active={shake} intensity={10} duration={500}>
+      <div className="relative w-full overflow-hidden rounded-2xl border border-slate-700/80">
+        {/* ฉากหลัง animated (responsive เต็มความกว้าง) */}
+        <PixelScene
+          environment={environment}
+          seed={seed}
+          style={style}
+          animated
+        />
+
+        {/* Vignette ให้ตัวละครเด่น */}
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_45%,rgba(5,8,20,0.55)_100%)]" />
+
+        {/* HERO — ซ้าย */}
+        <div className="absolute bottom-[6%] left-[10%] flex flex-col items-center gap-1.5">
+          <div className="relative">
+            <span
+              className={`${phase === "hero_attack" ? "eq-lunge-right inline-block" : "eq-float-idle inline-block"} relative`}
+              style={{
+                transform: phase === "hero_attack" ? "translateX(30px)" : "none",
+              }}
+            >
+              <AnimatedPixelSprite
+                kind="hero"
+                seed="player-hero"
+                style={style}
+                size={72}
+                floating
+                frame={phase === "hero_attack" ? "attack" : "idle"}
+                frameRate={100}
+              />
+            </span>
+            {showHit && phase === "hero_attack" && (
+              <PixelHitEffect
+                x={dmgPos.x}
+                y={dmgPos.y}
+                text={dmgText}
+                color="#4ade80"
+                particles
+                onEnd={handleHitEnd}
+              />
+            )}
+          </div>
+          <div className="w-24 rounded-full border border-slate-950/70 bg-slate-950/70 p-0.5 backdrop-blur-sm">
+            <div className="h-2 overflow-hidden rounded-full bg-slate-800">
+              <div
+                className={`h-full rounded-full transition-all duration-300 ${
+                  playerHpRatio > 0.3 ? "bg-gradient-to-r from-emerald-400 to-teal-400" : "bg-gradient-to-r from-rose-500 to-red-500"
+                }`}
+                style={{ width: `${Math.max(0, Math.min(100, playerHpRatio * 100))}%` }}
+              />
+            </div>
+          </div>
+          <p className="rounded bg-slate-950/70 px-2 py-0.5 text-[11px] font-bold text-emerald-300 backdrop-blur-sm">
+            YOU · {Math.round(playerHpRatio * 100)}%
+          </p>
+        </div>
+
+        {/* ENEMY — ขวา */}
+        <div className="absolute bottom-[6%] right-[10%] flex flex-col items-center gap-1.5">
+          <div className="relative">
+            <span
+              className={`${phase === "enemy_attack" ? "eq-lunge-left inline-block" : "eq-float-idle inline-block"} ${
+                defeated ? "eq-defeat" : ""
+              } relative`}
+            >
+              <AnimatedPixelSprite
+                kind={enemyKind}
+                seed={enemyName}
+                style={style}
+                size={enemyKind === "boss" ? 96 : 84}
+                floating
+                frame={phase === "enemy_attack" ? "attack" : "idle"}
+                frameRate={100}
+              />
+              {phase === "hero_attack" && (
+                <span className="eq-hit-flash absolute inset-0 bg-white/80 mix-blend-overlay" />
+              )}
+            </span>
+            {showHit && phase === "enemy_attack" && (
+              <PixelHitEffect
+                x={dmgPos.x}
+                y={dmgPos.y}
+                text={dmgText}
+                color="#f87171"
+                particles
+              />
+            )}
+          </div>
+          <div className="w-28 rounded-full border border-slate-950/70 bg-slate-950/70 p-0.5 backdrop-blur-sm">
+            <div className="h-2 overflow-hidden rounded-full bg-slate-800">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-orange-400 to-rose-500 transition-all duration-300"
+                style={{ width: `${Math.max(0, Math.min(100, enemyHpRatio * 100))}%` }}
+              />
+            </div>
+          </div>
+          <p className="max-w-40 truncate rounded bg-slate-950/70 px-2 py-0.5 text-[11px] font-bold text-rose-300 backdrop-blur-sm">
+            {enemyKind === "boss" ? "👑 " : "👾 "}
+            {enemyName}
+          </p>
+        </div>
+
+        {/* VS badge */}
+        <div className="absolute left-1/2 top-3 -translate-x-1/2 rounded-full border border-white/20 bg-slate-950/60 px-4 py-1 text-xs font-black tracking-widest text-white/90 backdrop-blur-sm">
+          ⚔️ BATTLE
+        </div>
+
+        {/* Victory confetti overlay */}
+        {showVictory && defeated && (
+          <div className="pointer-events-none absolute inset-0 z-50">
+            <Confetti count={80} duration={1600} />
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2">
+              <div className="eq-pop text-6xl font-black text-white drop-shadow-2xl animate-bounce">
+                🏆 ชนะแล้ว!
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </ScreenShake>
+  );
+}
+
+/* ============================================================================ */
+/*  NEW THEMES — Halloween / Cyberpunk / Christmas / Summer / Ocean            */
+/* ============================================================================ */
+
+const NEW_THEMES: Record<string, Theme> = {
+  halloween: {
+    sky: ["#1a1a2e", "#2d1b4a", "#4a1a3a"],
+    ground: "#4a3728", groundDark: "#2d2118",
+    tree: "#1b2a1b", treeDark: "#0f1a0f",
+    stone: "#6b5b4b", stoneDark: "#4a3d3d",
+    building: "#2d1b4a", buildingDark: "#1d0f2d",
+    roof: "#ff4d4d", accent: "#ffaa00",
+    outline: "#111111",
+    skin: ["#d4a373", "#b07a52", "#8d5a42"],
+    cloth: ["#8b0000", "#4b0082", "#2f4f4f", "#2e8b57"],
+    enemyBody: ["#5c4033", "#8b4513", "#a0522d"],
+    bossBody: ["#8b0000", "#4b0082", "#2f1b1b"],
+  },
+  cyberpunk: {
+    sky: ["#0a0a1a", "#1a0a33", "#2a0a4d"],
+    ground: "#1a1a2e", groundDark: "#0f0f1a",
+    tree: "#00ff88", treeDark: "#00cc6a",
+    stone: "#4a4a6a", stoneDark: "#2a2a4a",
+    building: "#1a1a2e", buildingDark: "#0f0f1a",
+    roof: "#00ffff", accent: "#ff00ff",
+    outline: "#000000",
+    skin: ["#e0e0ff", "#c0c0ff", "#a0a0e0"],
+    cloth: ["#00ffff", "#ff00ff", "#00ff88", "#ff0055"],
+    enemyBody: ["#00ffff", "#ff00ff", "#ff0055"],
+    bossBody: ["#ff00ff", "#00ffff", "#ff0055"],
+  },
+  christmas: {
+    sky: ["#2c3e50", "#34495e", "#4a5a70"],
+    ground: "#1e5e26", groundDark: "#15451d",
+    tree: "#2d8a34", treeDark: "#1e5e26",
+    stone: "#8b8b8b", stoneDark: "#5c5c5c",
+    building: "#d4af37", buildingDark: "#b8941e",
+    roof: "#dc143c", accent: "#ffd700",
+    outline: "#1a2a1a",
+    skin: ["#f5c89e", "#e0a878", "#c68642"],
+    cloth: ["#dc143c", "#228b22", "#4169e1", "#8b0000"],
+    enemyBody: ["#8b0000", "#4b0082", "#2f1b1b"],
+    bossBody: ["#dc143c", "#228b22", "#4169e1"],
+  },
+  summer: {
+    sky: ["#87ceeb", "#b0d4f0", "#d4e8f8"],
+    ground: "#4caf50", groundDark: "#388e3c",
+    tree: "#2e7d32", treeDark: "#1b5e20",
+    stone: "#9e9e9e", stoneDark: "#757575",
+    building: "#fff9c4", buildingDark: "#fbc02d",
+    roof: "#ff7043", accent: "#ffd54f",
+    outline: "#3e2723",
+    skin: ["#f5c89e", "#e0a878", "#c68642", "#8d5524"],
+    cloth: ["#ff7043", "#ffab40", "#29b6f6", "#ab47bc"],
+    enemyBody: ["#ff7043", "#ffab40", "#29b6f6"],
+    bossBody: ["#ff5252", "#ff1744", "#d50000"],
+  },
+  ocean: {
+    sky: ["#001f3f", "#003366", "#006699"],
+    ground: "#004d40", groundDark: "#003333",
+    tree: "#00695c", treeDark: "#004d40",
+    stone: "#607d8b", stoneDark: "#455a64",
+    building: "#b2ebf2", buildingDark: "#80deea",
+    roof: "#00bcd4", accent: "#00e5ff",
+    outline: "#00214a",
+    skin: ["#b2dfdb", "#80cbc4", "#4db6ac"],
+    cloth: ["#00bcd4", "#4dd0e1", "#80deea", "#00acc1"],
+    enemyBody: ["#00acc1", "#00bcd4", "#26c6da"],
+    bossBody: ["#00acc1", "#4dd0e1", "#00e5ff"],
+  },
+  neon: {
+    sky: ["#0a0a0a", "#1a0a1a", "#2a0a2a"],
+    ground: "#1a1a1a", groundDark: "#0a0a0a",
+    tree: "#ff00ff", treeDark: "#cc00cc",
+    stone: "#333333", stoneDark: "#1a1a1a",
+    building: "#1a1a1a", buildingDark: "#0a0a0a",
+    roof: "#00ffff", accent: "#ff00ff",
+    outline: "#000000",
+    skin: ["#e0e0ff", "#c0c0ff", "#a0a0e0"],
+    cloth: ["#00ffff", "#ff00ff", "#ffff00", "#00ff00"],
+    enemyBody: ["#00ffff", "#ff00ff", "#ffff00"],
+    bossBody: ["#ff00ff", "#00ffff", "#ff0055"],
+  },
+};
+
+// รวมธีมใหม่เข้ากับ THEMES เดิม
+Object.assign((THEMES as any), NEW_THEMES);
+
+/* ============================================================================ */
+/*  AnimatedPixelSprite — สปรัยต์มีอนิเมชันเฟรม (idle / walk / attack / hit) */
+/* ============================================================================ */
+
+export type SpriteFrame = "idle" | "walk" | "attack" | "hit";
+
+interface AnimatedPixelSpriteProps {
+  kind: "hero" | "npc" | "enemy" | "boss";
+  seed: string;
+  style?: string;
+  size?: number;
+  frame?: SpriteFrame;
+  floating?: boolean;
+  /** milliseconds ต่อเฟรมเมื่อเดิน/โจมตี */
+  frameRate?: number;
+}
+
+const FRAME_OFFSETS: Record<SpriteFrame, { x: number; y: number }> = {
+  idle: { x: 0, y: 0 },
+  walk: { x: 16, y: 0 },
+  attack: { x: 32, y: 0 },
+  hit: { x: 48, y: 0 },
+};
+
+export function AnimatedPixelSprite({
+  kind,
+  seed,
+  style,
+  size = 48,
+  frame = "idle",
+  floating = false,
+  frameRate = 120,
+}: AnimatedPixelSpriteProps) {
+  const theme = getTheme(style || "pixel_art");
+  const [animFrame, setAnimFrame] = React.useState<SpriteFrame>(frame);
+  const [walkIndex, setWalkIndex] = React.useState(0);
+
+  React.useEffect(() => {
+    if (frame === "walk" || frame === "attack") {
+      const id = setInterval(() => {
+        setWalkIndex((i) => (i + 1) % 2);
+        setAnimFrame((f) => (f === "attack" ? "attack" : "walk"));
+      }, frameRate);
+      return () => clearInterval(id);
+    }
+    setAnimFrame(frame);
+  }, [frame, frameRate]);
+
+  const offset = FRAME_OFFSETS[animFrame];
+  const draw = makeSpriteDrawer(kind, theme);
+
+  return (
+    <span
+      className={floating ? "eq-float-idle inline-block" : "inline-block"}
+      style={{ display: "inline-block", lineHeight: 0, position: "relative" }}
+    >
+      <PixelCanvas
+        logicalWidth={kind === "boss" ? 24 : 16}
+        logicalHeight={kind === "boss" ? 24 : 16}
+        displayWidth={size}
+        seed={`${style || ""}|${kind}|${seed}|${walkIndex}`}
+        draw={(ctx, rng) => {
+          ctx.save();
+          ctx.translate(offset.x, offset.y);
+          draw(ctx, rng);
+          ctx.restore();
+        }}
       />
+    </span>
+  );
+}
 
-      {/* Vignette ให้ตัวละครเด่น */}
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_45%,rgba(5,8,20,0.55)_100%)]" />
+/* ============================================================================ */
+/*  PixelXPBar — แถบ XP เคลื่อนไหวพร้อมเลเวล                                */
+/* ============================================================================ */
 
-      {/* HERO — ซ้าย */}
-      <div className="absolute bottom-[6%] left-[10%] flex flex-col items-center gap-1.5">
-        <span className={phase === "hero_attack" ? "eq-lunge-right inline-block" : "eq-float-idle inline-block"}>
-          <PixelSprite kind="hero" seed="player-hero" style={style} size={72} floating />
-        </span>
-        <div className="w-24 rounded-full border border-slate-950/70 bg-slate-950/70 p-0.5 backdrop-blur-sm">
-          <div className="h-2 overflow-hidden rounded-full bg-slate-800">
-            <div
-              className={`h-full rounded-full transition-all duration-300 ${
-                playerHpRatio > 0.3 ? "bg-gradient-to-r from-emerald-400 to-teal-400" : "bg-gradient-to-r from-rose-500 to-red-500"
-              }`}
-              style={{ width: `${Math.max(0, Math.min(100, playerHpRatio * 100))}%` }}
-            />
-          </div>
-        </div>
-        <p className="rounded bg-slate-950/70 px-2 py-0.5 text-[11px] font-bold text-emerald-300 backdrop-blur-sm">
-          YOU · {Math.round(playerHpRatio * 100)}%
-        </p>
+interface PixelXPBarProps {
+  currentXP: number;
+  nextLevelXP: number;
+  level: number;
+  width?: number;
+  className?: string;
+}
+
+export function PixelXPBar({
+  currentXP,
+  nextLevelXP,
+  level,
+  width = 200,
+  className = "",
+}: PixelXPBarProps) {
+  const pct = Math.max(0, Math.min(100, Math.round((currentXP / nextLevelXP) * 100)));
+  return (
+    <div className={`w-full ${className}`} style={{ width }}>
+      <div className="flex justify-between mb-1 text-xs font-bold text-slate-300">
+        <span>LEVEL {level}</span>
+        <span>{currentXP.toLocaleString()} / {nextLevelXP.toLocaleString()} XP</span>
       </div>
-
-      {/* ENEMY — ขวา */}
-      <div className="absolute bottom-[6%] right-[10%] flex flex-col items-center gap-1.5">
-        <span
-          className={`${phase === "enemy_attack" ? "eq-lunge-left inline-block" : "eq-float-idle inline-block"} ${
-            defeated ? "eq-defeat" : ""
-          } relative`}
-        >
-          <PixelSprite kind={enemyKind} seed={enemyName} style={style} size={enemyKind === "boss" ? 96 : 84} floating />
-          {phase === "hero_attack" && (
-            <span className="eq-hit-flash absolute inset-0 bg-white/80 mix-blend-overlay" />
-          )}
-        </span>
-        <div className="w-28 rounded-full border border-slate-950/70 bg-slate-950/70 p-0.5 backdrop-blur-sm">
-          <div className="h-2 overflow-hidden rounded-full bg-slate-800">
-            <div
-              className="h-full rounded-full bg-gradient-to-r from-orange-400 to-rose-500 transition-all duration-300"
-              style={{ width: `${Math.max(0, Math.min(100, enemyHpRatio * 100))}%` }}
-            />
-          </div>
-        </div>
-        <p className="max-w-40 truncate rounded bg-slate-950/70 px-2 py-0.5 text-[11px] font-bold text-rose-300 backdrop-blur-sm">
-          {enemyKind === "boss" ? "👑 " : "👾 "}
-          {enemyName}
-        </p>
-      </div>
-
-      {/* VS badge */}
-      <div className="absolute left-1/2 top-3 -translate-x-1/2 rounded-full border border-white/20 bg-slate-950/60 px-4 py-1 text-xs font-black tracking-widest text-white/90 backdrop-blur-sm">
-        ⚔️ BATTLE
+      <div className="h-3 w-full rounded-full bg-slate-800 border border-slate-600 overflow-hidden relative">
+        <div
+          className="h-full bg-gradient-to-r from-emerald-400 to-teal-400 eq-progress-shimmer transition-all duration-700 ease-out"
+          style={{ width: `${pct}%` }}
+        />
       </div>
     </div>
   );
 }
+
+/* ============================================================================ */
+/*  React import guard (ใช้ในคอมโพเนนต์ใหม่ด้านล่าง)                       */
+/* ============================================================================ */
+
+// กรณีไฟล์นี้ถูก import โดยไฟล์ที่ยังไม่มี React ให้ import ซ้ำที่นี่
+import React from "react";
+
 

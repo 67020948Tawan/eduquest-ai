@@ -21,9 +21,12 @@ import {
   type CourseStructure,
   type ChapterView,
   type AnswerResult,
+  type AnsweredRecord,
   type CheckpointResult,
   type GameResult,
   type GameState,
+  type QuestionType,
+  type SessionState,
 } from "@/lib/api";
 
 type Screen = "map" | "chapter" | "result";
@@ -79,7 +82,7 @@ function CoursePlayInner() {
   const [viewMode, setViewMode] = useState<"learn" | "play">("learn");
 
   // Per-question state
-  const [selected, setSelected] = useState<Record<number, number>>({});
+  const [selected, setSelected] = useState<Record<number, number | Record<string, string> | number[]>>({});
   const [results, setResults] = useState<Record<number, AnswerResult>>({});
   const [submittingId, setSubmittingId] = useState<number | null>(null);
   const [qIndex, setQIndex] = useState(0); // การ์ดคำถามแสดงทีละใบ
@@ -135,22 +138,7 @@ function CoursePlayInner() {
       .finally(() => setLoading(false));
   }, [courseId, token]);
 
-  function hydrateSession(session: {
-    session_id: number;
-    xp: number;
-    answered: Record<
-      string,
-      {
-        answer: number | null;
-        correct: boolean;
-        correct_answer_index: number | null;
-        explanation: string | null;
-        source_reference: string | null;
-      }
-    >;
-    completed_chapters: number[];
-    game_state?: GameState;
-  }) {
+  function hydrateSession(session: SessionState) {
     setSessionId(session.session_id);
     setXp(session.xp || 0);
     setCompletedChapters(session.completed_chapters || []);
@@ -159,11 +147,21 @@ function CoursePlayInner() {
     const answered: Record<string, boolean> = {};
     const hydratedResults: Record<number, AnswerResult> = {};
     for (const [qidStr, rec] of Object.entries(session.answered || {})) {
+      const r = rec as AnsweredRecord & {
+        correct_data: Record<string, string> | string[] | null;
+        matching_pairs: Array<{ left: string; right: string }> | null;
+        ordering_items: string[] | null;
+        question_type: QuestionType;
+      };
       answered[qidStr] = rec.correct;
       hydratedResults[Number(qidStr)] = {
         already_answered: true,
         correct: rec.correct,
+        question_type: r.question_type ?? "multiple_choice",
         correct_answer_index: rec.correct_answer_index,
+        correct_data: r.correct_data ?? null,
+        matching_pairs: r.matching_pairs ?? null,
+        ordering_items: r.ordering_items ?? null,
         explanation: rec.explanation ?? undefined,
         source_reference: rec.source_reference,
         xp_awarded: 0,
@@ -274,11 +272,11 @@ function CoursePlayInner() {
   }
 
   const handleAnswer = useCallback(
-    async function handleAnswer(questionId: number, answerIndex: number) {
+    async function handleAnswer(questionId: number, answerPayload: { answer_index?: number; matching?: Record<string, string>; ordering?: number[] }) {
       if (!sessionId || results[questionId]) return;
       setSubmittingId(questionId);
       try {
-        const result = await submitAnswer(sessionId, questionId, answerIndex);
+        const result = await submitAnswer(sessionId, { question_id: questionId, ...answerPayload });
         setResults((prev) => ({ ...prev, [questionId]: result }));
         setAnsweredMap((prev) => ({ ...prev, [String(questionId)]: result.correct }));
         setXp(result.total_xp);
@@ -1019,11 +1017,33 @@ function CoursePlayInner() {
               const q = chapter.quiz_questions[qIndex];
               const result = results[q.id];
               const locked = Boolean(result);
-              const selectedIdx = selected[q.id];
+              const selectedVal = selected[q.id];
               const eliminated = hints[q.id] ?? [];
               const canHint =
                 !locked && (gs.resources.knowledge ?? 0) >= 1 && eliminated.length === 0;
               const isLastQ = qIndex >= chapter.quiz_questions.length - 1;
+              const qType = q.question_type;
+
+              // ---- Helper: is answer complete? ----
+              const isComplete = (() => {
+                if (result) return true;
+                if (qType === "multiple_choice" || qType === "true_false") {
+                  return typeof selectedVal === "number";
+                }
+                if (qType === "matching") {
+                  const m = selectedVal as Record<string, string> | undefined;
+                  if (!m) return false;
+                  const pairs = q.matching_pairs ?? [];
+                  return Object.keys(m).length === pairs.length;
+                }
+                if (qType === "ordering") {
+                  const o = selectedVal as number[] | undefined;
+                  if (!o) return false;
+                  const items = q.ordering_items ?? [];
+                  return o.length === items.length;
+                }
+                return false;
+              })();
 
               return (
                 <div
@@ -1041,48 +1061,190 @@ function CoursePlayInner() {
                     <span className="shrink-0 rounded-full bg-amber-950/50 px-2.5 py-1 text-xs font-bold text-amber-400">
                       +{q.points} XP
                     </span>
+                    <span className="shrink-0 rounded-full bg-slate-800 px-2 py-1 text-xs text-slate-400">
+                      {qType === "matching" ? "🔗 จับคู่" : qType === "ordering" ? "🔢 เรียงลำดับ" : qType === "true_false" ? "✅❌ จริง/เท็จ" : "🔘 เลือกข้อ"}
+                    </span>
                   </div>
 
                   {q.source_reference && (
                     <p className="mb-3 text-xs text-slate-500">📚 Based on: {q.source_reference}</p>
                   )}
 
-                  <div className="grid gap-2">
-                    {q.options.map((opt, optIdx) => {
-                      const isEliminated = eliminated.includes(optIdx);
-                      let cls =
-                        "border-slate-700 bg-slate-950 text-slate-300 hover:border-indigo-500/60 hover:bg-slate-900";
-                      if (result) {
-                        if (optIdx === result.correct_answer_index)
-                          cls = "border-emerald-500 bg-emerald-950/50 font-bold text-emerald-300";
-                        else if (optIdx === selectedIdx && !result.correct)
-                          cls = "border-rose-500 bg-rose-950/50 text-rose-300 line-through opacity-70";
-                        else cls = "border-slate-800 bg-slate-950/50 text-slate-600 opacity-60";
-                      } else if (isEliminated) {
-                        cls = "cursor-not-allowed border-slate-900 bg-slate-950/70 text-slate-700 line-through opacity-40";
-                      } else if (selectedIdx === optIdx) {
-                        cls = "border-indigo-500 bg-indigo-950/40 text-indigo-200 ring-1 ring-indigo-500";
-                      }
+                  {/* ===== RENDER BY TYPE ===== */}
+                  {qType === "matching" && (
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div>
+                        <p className="text-xs font-semibold text-slate-400 mb-2">ฝั่งซ้าย</p>
+                        {q.matching_pairs?.map((pair, i) => {
+                          const isMatched = Boolean(selectedVal && (selectedVal as Record<string,string>)[pair.left]);
+                          const cls = `rounded-lg border px-3 py-2 text-sm transition-all ${
+                            isMatched ? "border-emerald-500 bg-emerald-950/40 text-emerald-200" :
+                            (typeof selectedVal === "string" && (selectedVal as Record<string,string>).__selectedLeft === pair.left ? "border-indigo-500 bg-indigo-950/40" :
+                             "border-slate-700 bg-slate-950 text-slate-300 hover:border-indigo-500/60")
+                          }`;
+                          return (
+                            <button
+                              key={`L-${i}`}
+                              disabled={locked || submittingId === q.id || isMatched}
+                              onClick={() => {
+                                if (locked || submittingId === q.id) return;
+                                const cur = (selectedVal as Record<string,string>) || {};
+                                // mark left selected temporarily via a special key
+                                setSelected((prev) => ({ ...prev, [q.id]: { ...cur, __selectedLeft: pair.left } as Record<string,string> }));
+                              }}
+                              className={cls}
+                            >
+                              {pair.left}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold text-slate-400 mb-2">ฝั่งขวา</p>
+                        {q.matching_pairs?.map((pair, i) => {
+                          const isMatched = Boolean(selectedVal && (selectedVal as Record<string,string>)[pair.left] === pair.right);
+                          const cls = `rounded-lg border px-3 py-2 text-sm transition-all ${
+                            isMatched ? "border-emerald-500 bg-emerald-950/40 text-emerald-200" :
+                            (typeof selectedVal === "string" && (selectedVal as Record<string,string>).__selectedRight === pair.right ? "border-indigo-500 bg-indigo-950/40" :
+                             "border-slate-700 bg-slate-950 text-slate-300 hover:border-indigo-500/60")
+                          }`;
+                          return (
+                            <button
+                              key={`R-${i}`}
+                              disabled={locked || submittingId === q.id || isMatched}
+                              onClick={() => {
+                                if (locked || submittingId === q.id) return;
+                                const cur = (selectedVal as Record<string,string>) || {};
+                                const leftSel = cur.__selectedLeft;
+                                const next = { ...cur };
+                                delete next.__selectedLeft;
+                                if (leftSel) next[leftSel] = pair.right;
+                                setSelected((prev) => ({ ...prev, [q.id]: next as Record<string,string> }));
+                              }}
+                              className={cls}
+                            >
+                              {pair.right}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
 
-                      return (
-                        <button
-                          key={optIdx}
-                          disabled={locked || isEliminated || submittingId === q.id}
-                          onClick={() => setSelected((prev) => ({ ...prev, [q.id]: optIdx }))}
-                          className={`rounded-xl border px-4 py-2.5 text-left text-sm leading-relaxed transition-all ${cls}`}
-                        >
-                          {opt}
-                        </button>
-                      );
-                    })}
-                  </div>
+                  {qType === "ordering" && (
+                    <div className="space-y-2">
+                      <p className="text-xs font-semibold text-slate-400 mb-2">ลาก/คลิกเพื่อเรียงลำดับให้ถูกต้อง</p>
+                      {(q.ordering_items ?? []).map((item, i) => {
+                          const currentOrder = (selectedVal as number[]) || [];
+                          const pos = currentOrder.indexOf(i);
+                          const cls = `rounded-lg border px-3 py-2 text-sm transition-all ${
+                            pos === -1
+                              ? "border-slate-700 bg-slate-950 text-slate-300 hover:border-indigo-500/60"
+                              : "border-emerald-500 bg-emerald-950/40 text-emerald-200"
+                          }`;
+                          return (
+                            <div key={`item-${i}`} className={cls}>
+                              <div className="flex items-center justify-between">
+                                <span className="font-medium">{item}</span>
+                                <span className="text-xs text-slate-500">{pos === -1 ? "ยังไม่เรียง" : `อันดับ ${pos + 1}`}</span>
+                              </div>
+                              <div className="flex gap-1 mt-1">
+                                <button
+                                  disabled={locked || submittingId === q.id || pos <= 0}
+                                  onClick={() => {
+                                    if (locked || submittingId === q.id) return;
+                                    const cur = (selectedVal as number[]) || [];
+                                    if (!cur.includes(i)) {
+                                      setSelected((prev) => ({ ...prev, [q.id]: [...cur, i] as number[] }));
+                                    } else {
+                                      const idx = cur.indexOf(i);
+                                      const next = [...cur];
+                                      next.splice(idx, 1);
+                                      next.splice(Math.max(0, idx - 1), 0, i);
+                                      setSelected((prev) => ({ ...prev, [q.id]: next as number[] }));
+                                    }
+                                  }}
+                                  className="px-2 py-1 rounded bg-slate-800 text-slate-300 text-xs hover:bg-slate-700 disabled:opacity-50"
+                                >
+                                  ↑
+                                </button>
+                                <button
+                                  disabled={locked || submittingId === q.id || pos === -1 || pos >= (q.ordering_items ?? []).length - 1}
+                                  onClick={() => {
+                                    if (locked || submittingId === q.id) return;
+                                    const cur = (selectedVal as number[]) || [];
+                                    if (!cur.includes(i)) {
+                                      setSelected((prev) => ({ ...prev, [q.id]: [...cur, i] as number[] }));
+                                    } else {
+                                      const idx = cur.indexOf(i);
+                                      const next = [...cur];
+                                      next.splice(idx, 1);
+                                      next.splice(Math.min(next.length, idx + 1), 0, i);
+                                      setSelected((prev) => ({ ...prev, [q.id]: next as number[] }));
+                                    }
+                                  }}
+                                  className="px-2 py-1 rounded bg-slate-800 text-slate-300 text-xs hover:bg-slate-700 disabled:opacity-50"
+                                >
+                                  ↓
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      {typeof selectedVal === "number" && (
+                        <p className="text-xs text-amber-400 mt-2">เลือก項目แล้วกด ↑/↓ เพื่อเรียงลำดับ</p>
+                      )}
+                    </div>
+                  )}
+
+                  {(!qType || qType === "multiple_choice" || qType === "true_false") && (
+                    <div className="grid gap-2">
+                      {q.options.map((opt, optIdx) => {
+                        const isEliminated = eliminated.includes(optIdx);
+                        let cls =
+                          "border-slate-700 bg-slate-950 text-slate-300 hover:border-indigo-500/60 hover:bg-slate-900";
+                        if (result) {
+                          if (optIdx === result.correct_answer_index)
+                            cls = "border-emerald-500 bg-emerald-950/50 font-bold text-emerald-300";
+                          else if (optIdx === (selectedVal as number) && !result.correct)
+                            cls = "border-rose-500 bg-rose-950/50 text-rose-300 line-through opacity-70";
+                          else cls = "border-slate-800 bg-slate-950/50 text-slate-600 opacity-60";
+                        } else if (isEliminated) {
+                          cls = "cursor-not-allowed border-slate-900 bg-slate-950/70 text-slate-700 line-through opacity-40";
+                        } else if (selectedVal === optIdx) {
+                          cls = "border-indigo-500 bg-indigo-950/40 text-indigo-200 ring-1 ring-indigo-500";
+                        }
+
+                        return (
+                          <button
+                            key={optIdx}
+                            disabled={locked || isEliminated || submittingId === q.id}
+                            onClick={() => setSelected((prev) => ({ ...prev, [q.id]: optIdx }))}
+                            className={`rounded-xl border px-4 py-2.5 text-left text-sm leading-relaxed transition-all ${cls}`}
+                          >
+                            {opt}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
 
                   <div className="mt-4 space-y-3">
                     {!result ? (
                       <div className="flex items-center gap-3">
                         <button
-                          onClick={() => handleAnswer(q.id, selectedIdx)}
-                          disabled={selectedIdx === undefined || submittingId === q.id}
+                          onClick={() => {
+                            if (!isComplete) {
+                              pushToast(qType === "matching" ? "จับคู่ให้ครบทุกคู่ก่อนส่ง" : qType === "ordering" ? "เรียงลำดับให้ครบทุกข้อก่อนส่ง" : "กรุณาเลือกคำตอบ");
+                              return;
+                            }
+                            handleAnswer(q.id, {
+                              answer_index: qType === "multiple_choice" || qType === "true_false" ? (selectedVal as number) : undefined,
+                              matching: qType === "matching" ? ((selectedVal as Record<string,string>) || {}) : undefined,
+                              ordering: qType === "ordering" ? ((selectedVal as number[]) || []) : undefined,
+                            });
+                          }}
+                          disabled={!isComplete || submittingId === q.id}
                           className={`flex-1 rounded-lg px-4 py-2 text-sm font-bold transition-all active:scale-[0.98] disabled:bg-slate-800 disabled:text-slate-500 ${
                             hasCombat
                               ? "bg-gradient-to-r from-rose-600 to-red-500 text-white shadow-lg shadow-rose-950/50 hover:from-rose-500 hover:to-red-400"
@@ -1091,7 +1253,7 @@ function CoursePlayInner() {
                         >
                           {submittingId === q.id ? "กำลังตรวจ..." : hasCombat ? "⚔️ โจมตี!" : "✅ ส่งคำตอบ"}
                         </button>
-                        {canHint && (
+                        {canHint && qType !== "matching" && qType !== "ordering" && (
                           <button
                             onClick={() => handleHint(q.id)}
                             disabled={hintLoading === q.id}
@@ -1121,6 +1283,32 @@ function CoursePlayInner() {
                           {result.explanation && <p className="text-sm leading-relaxed opacity-90">{result.explanation}</p>}
                           {result.source_reference && (
                             <p className="mt-2 text-xs opacity-70">📚 Based on: {result.source_reference}</p>
+                          )}
+                          {!result.correct && qType === "matching" && result.matching_pairs && result.correct_data && (
+                            <div className="mt-3 text-xs text-slate-400">
+                              <p className="font-semibold mb-1">เฉลยการจับคู่:</p>
+                              {result.matching_pairs.map((p, i) => {
+                                const cd = result.correct_data as Record<string, string>;
+                                return (
+                                  <span key={i} className="block ml-2">
+                                    ✓ {p.left} → {cd[p.left] || p.right}
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          )}
+                          {!result.correct && qType === "ordering" && result.ordering_items && result.correct_data && (
+                            <div className="mt-3 text-xs text-slate-400">
+                              <p className="font-semibold mb-1">เฉลยลำดับที่ถูก:</p>
+                              {(result.correct_data as unknown as number[]).map((idx, i) => {
+                                const items = result.ordering_items as string[];
+                                return (
+                                  <span key={i} className="block ml-2">
+                                    {i + 1}. {items[idx]}
+                                  </span>
+                                );
+                              })}
+                            </div>
                           )}
                         </div>
 

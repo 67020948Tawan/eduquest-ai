@@ -89,6 +89,20 @@ body {
 }
 .eq-hit-flash { animation: eq-hit-flash 0.3s ease-out; border-radius: 9999px; }
 
+/* วัฒวาบจอเต็มเมื่อโดนโจมตี / ตอบถูก */
+@keyframes eq-flash {
+  0% { opacity: 0.35; }
+  100% { opacity: 0; }
+}
+.eq-flash {
+  position: fixed;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.35);
+  z-index: 9999;
+  pointer-events: none;
+  animation: eq-flash 0.14s ease-out forwards;
+}
+
 /* Progress bar shimmer */
 @keyframes eq-shimmer {
   0% { background-position: -200% 0; }

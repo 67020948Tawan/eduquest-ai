@@ -14,11 +14,24 @@
 import json
 import traceback
 
-from schemas.generation import CourseGenerationAI
+from schemas.generation import CourseGenerationAI, ContentSufficiencyAI
 from services.ai_provider import get_ai_provider, AIProviderError
 from services.extractors import extract_text, ExtractionError
 
 MAX_SOURCE_CHARS = 24000
+
+# ------------------------------------------------------------------------------
+# Game Length Config — จำนวนบทและคำถามต่อบทตามความยาวที่เลือก
+# ------------------------------------------------------------------------------
+
+GAME_LENGTH_CONFIG = {
+    "short":   {"chapters": 5,  "questions_per_chapter": 2},
+    "medium":  {"chapters": 10, "questions_per_chapter": 3},
+    "long":    {"chapters": 15, "questions_per_chapter": 4},
+}
+
+VALID_LENGTHS = set(GAME_LENGTH_CONFIG.keys())
+VALID_QUESTION_TYPES = {"multiple_choice", "true_false", "matching", "ordering"}
 
 # Language codes ที่รองรับการบังคับ (map → ชื่อภาษาเต็มส่งให้ AI)
 LANGUAGE_NAMES = {
@@ -108,6 +121,73 @@ async def analyze_content(file_path: str) -> dict:
 
 
 # ------------------------------------------------------------------------------
+# NEW: Content Sufficiency Checker — AI ตรวจสอบว่าเนื้อหาพอต่อความยาวเกมหรือไม่
+# ------------------------------------------------------------------------------
+
+async def analyze_content_sufficiency(file_path: str, game_length: str = "medium") -> dict:
+    """
+    Agent 1b: ตรวจสอบว่าเนื้อหาในเอกสารเพียงพอต่อการสร้างเกมความยาวที่เลือกหรือไม่
+    คืน dict หรือ {"error": ...}
+    """
+    if game_length not in VALID_LENGTHS:
+        return {"error": f"game_length ต้องเป็นหนึ่งใน {VALID_LENGTHS}"}
+
+    try:
+        source = _read_source(file_path)
+        provider = get_ai_provider()
+        lang = detect_language(source)
+
+        length_cfg = GAME_LENGTH_CONFIG[game_length]
+        target_questions = length_cfg["chapters"] * length_cfg["questions_per_chapter"]
+
+        prompt = f"""คุณคือ Content Sufficiency Checker Agent ผู้เชี่ยวชาญด้านการออกแบบการเรียนรู้
+จงอ่านเนื้อหาเอกสารบทเรียนต่อไปนี้และประเมินว่ามีเนื้อหาเพียงพอที่จะสร้างเกม
+ตามความยาวที่กำหนดหรือไม่:
+
+=== เอกสารต้นทาง ===
+{source}
+
+=== ความยาวเกมที่ต้องการ ===
+- ระดับ: {game_length}
+- จำนวนบท: {length_cfg['chapters']} บท
+- คำถามต่อบท: {length_cfg['questions_per_chapter']} ข้อ
+- คำถามรวมเป้าหมาย: {target_questions} ข้อ
+
+🌐 LANGUAGE RULE: ตอบกลับเป็นภาษา{LANGUAGE_NAMES[lang]}ทั้งหมด
+
+ประเมินตามเกณฑ์:
+- "sufficient": เนื้อหามีแนวคิด/ข้อเท็จจริงเพียงพอต่อคำถามเป้าหมาย (แนวคิด ≥ คำถามเป้าหมาย × 1.5)
+- "borderline": เนื้อหาพอพอดี (แนวคิด ≥ คำถามเป้าหมาย × 1.0 แต่ < × 1.5)
+- "insufficient": เนื้อหาน้อยเกินไป (แนวคิด < คำถามเป้าหมาย)
+
+นับจำนวนแนวคิดหลัก (key concepts) ที่สามารถแยกออกเป็นคำถามได้จริงจากเอกสาร
+ประเมินจากความหนาแน่นของข้อเท็จจริง ตัวอย่าง คำอธิบาย และความซ้ำซ้อน
+
+ตอบกลับเป็น JSON Object ตามโครงสร้างนี้เท่านั้น:
+{{
+  "sufficient": true/false,
+  "level": "sufficient | borderline | insufficient",
+  "estimated_questions": <จำนวนคำถามสูงสุดที่สร้างได้จริงจากเนื้อหานี้>,
+  "recommended_length": "short | medium | long",
+  "warnings": ["คำเตือนถ้ามี"],
+  "suggestions": ["คำแนะนำ เช่น เพิ่มเอกสาร หรือลดความยาวเกม"]
+}}"""
+
+        return await provider.generate_json(
+            system_prompt="You are a content sufficiency analysis agent that outputs only valid JSON.",
+            user_prompt=prompt,
+        )
+    except (ExtractionError, AIProviderError) as e:
+        print(f"❌ [ContentSufficiency] {e}")
+        traceback.print_exc()
+        return {"error": str(e)}
+    except Exception as e:
+        print("❌ [ContentSufficiency] Unexpected error:")
+        traceback.print_exc()
+        return {"error": f"AI ตรวจสอบความเพียงพอของเนื้อหาไม่สำเร็จ: {e}"}
+
+
+# ------------------------------------------------------------------------------
 # Agent 2 — Game Director (Genre Recommender)
 # ------------------------------------------------------------------------------
 
@@ -194,6 +274,8 @@ async def generate_game(
     game_modes: list[str] | None = None,
     visual_style: str = "pixel_art",
     ai_instruction: str | None = None,
+    game_length: str = "medium",
+    question_types: list[str] | None = None,
 ) -> dict:
     """
     Pipeline: Extract → Prompt (Game Plan) → LLM → Schema Validation
@@ -207,6 +289,21 @@ async def generate_game(
     instruction_block = (
         f"\nคำสั่งพิเศษจากผู้สอน (ต้องปฏิบัติตาม):\n{ai_instruction}\n" if ai_instruction else ""
     )
+
+    # ---- Game Length Config ----
+    if game_length not in VALID_LENGTHS:
+        game_length = "medium"
+    length_cfg = GAME_LENGTH_CONFIG[game_length]
+    target_chapters = length_cfg["chapters"]
+    target_q_per_chapter = length_cfg["questions_per_chapter"]
+
+    # ---- Question Types ----
+    if question_types is None:
+        question_types = ["multiple_choice"]
+    # บังคับให้มี multiple_choice เสมอ (เป็น fallback)
+    if "multiple_choice" not in question_types:
+        question_types = ["multiple_choice"] + question_types
+    qt_lines = "\n".join(f"- {qt}" for qt in question_types)
 
     schema_structure = json.dumps(CourseGenerationAI.model_json_schema(), ensure_ascii=False)
 
@@ -230,13 +327,26 @@ async def generate_game(
 โหมดเกมที่ต้องประยุกต์ใช้:
 {mode_lines}
 Visual Style ของเกม: {style_hint} (ใช้กำหนดโทน world/environment/description){instruction_block}
+
+⏱️ ความยาวเกม: {game_length}
+- สร้างบทเรียนทั้งหมด {target_chapters} บท (ห้ามน้อยกว่านี้)
+- สร้างคำถาม {target_q_per_chapter} ข้อต่อบท (ห้ามน้อยกว่า {target_q_per_chapter})
+- คำถามรวมประมาณ {target_chapters * target_q_per_chapter} ข้อ
+
+🎯 ประเภทคำถามที่อนุญาต (เลือกสลับกันในแต่ละบท เพื่อความหลากหลาย):
+{qt_lines}
+- multiple_choice: เลือกข้อเดียวจากตัวเลือก 4 ข้อ (ต้องมี correct_answer_index)
+- true_false: จริง/เท็จ (options = ["จริง","เท็จ"] หรือ ["True","False"])
+- matching: จับคู่ (ต้องมี matching_pairs และ correct_data)
+- ordering: เรียงลำดับ (ต้องมี ordering_items และ correct_data)
+
 🌐 LANGUAGE RULE (สำคัญที่สุด — ผิดข้อนี้ถือว่าล้มเหลวทั้งงาน):
 - เอกสารต้นทางเป็นภาษา{language_rule} → คุณต้องสร้างทุก field เป็นภาษา{language_rule}เท่านั้น
 - ครอบคลุม: world_name, intro_story, ending_story, ชื่อ zone/environment, ชื่อ+บทบาท+dialogue ของ NPC,
   ชื่อ+คำอธิบาย enemy/boss, lesson.title/objective/content, question/options/explanation,
   source_reference, theme, level title, badge name/description/condition_hint
 - ❌ ห้ามเอาเอกสารไทยไปเจนเกมเป็นภาษาอังกฤษ / ห้ามเอาเอกสารอังกฤษไปเจนเป็นภาษาไทย
-- ❌ ห้ามใช้ภาษาจีน ญี่ปุ่น หรือภาษาอื่นใดที่ไม่ใช่ภาษา{language_rule}โดยเด็ดขาด ทั้งชื่อ คำอธิบาย และ dialogue
+- ❌ ห้ามใช้ภาษาจีน ญี่ปุ่น หรือภาษาอื่นใดที่ไม่ใช่ภาษา{language_rule}โดยเด็ดขาด
 - ✅ ยกเว้น: ศัพท์เทคนิค/ชื่อวิชาการที่เป็นสากลในเอกสาร (เช่น SQL, Primary Key) คงไว้ตามต้นฉบับได้
 
 ⚠️ กฎเหล็ก (CRITICAL RULES):
@@ -245,7 +355,10 @@ Visual Style ของเกม: {style_hint} (ใช้กำหนดโทน
 2. ทุก zone ต้อง map กับ chapter (chapter_index 0-based), ทุก enemy/boss/quest ต้องมีรากจากเนื้อหาจริงในเอกสาร
 3. quiz_questions ต้องมี correct_answer_index ชี้ index ที่มีอยู่จริงใน options
 4. ใน string values ห้ามใช้ double quote (") ซ้อน — ใช้ single quote (') หรือ “ ” แทน
-5. บังคับ: อย่างน้อย 10 chapters (10-12 ด่าน) · คำถาม chapter ละ 3-4 ข้อ (ห้ามน้อยกว่า 3) · ถ้าเอกสารสั้นให้แตกหัวข้อย่อย/ตัวอย่าง/แบบฝึกหัดให้ครบ 10 ด่าน อย่ายุบรวม"""
+5. สำหรับ matching: ให้กรอก matching_pairs (array ของ {{"left":"...","right":"..."}}) และ correct_data (map left_id → right_id)
+6. สำหรับ ordering: ให้กรอก ordering_items (array ของ items ในลำดับที่ AI สุ่ม) และ correct_data (array ของ indices ตามลำดับที่ถูกต้อง)
+7. บังคับ: อย่างน้อย {target_chapters} chapters · คำถาม chapter ละ {target_q_per_chapter} ข้อ (ห้ามน้อยกว่านี้) · ถ้าเอกสารสั้นให้แตกหัวข้อย่อย/ตัวอย่าง/แบบฝึกหัดให้ครบตามเป้า อย่ายุบรวม
+8. ผสมประเภทคำถามให้หลากหลายในแต่ละบท ตามที่อนุญาตไว้ข้างต้น"""
 
     try:
         # Retry สูงสุด 3 รอบ:
@@ -263,16 +376,16 @@ Visual Style ของเกม: {style_hint} (ใช้กำหนดโทน
             extra = ""
             if cfg.get("compact"):
                 extra += (
-                    "\n\n📦 OUTPUT SIZE LIMIT (บังคับ เพื่อไม่ให้ output ยาวเกินไป):"
-                    "\n- chapters: 10 chapters (ห้ามน้อยกว่านี้ — ต้องครบ 10 ด่าน)"
-                    "\n- quiz_questions: chapter ละ 3 ข้อเท่านั้น"
+                    f"\n\n📦 OUTPUT SIZE LIMIT (บังคับ เพื่อไม่ให้ output ยาวเกินไป):"
+                    f"\n- chapters: {target_chapters} chapters (ห้ามน้อยกว่านี้ — ต้องครบ {target_chapters} ด่าน)"
+                    f"\n- quiz_questions: chapter ละ {target_q_per_chapter} ข้อเท่านั้น"
                     "\n- intro_story/ending_story: ไม่เกิน 2 ประโยค"
                     "\n- lesson.content: กระชับ ไม่เกิน 5-6 ประโยค"
                     "\n- enemies: 4 ตัว, npcs: 3 ตัว, bosses: 1 ตัว"
                 )
             if cfg.get("ultra"):
                 extra += (
-                    "\n🚨 ULTRA COMPACT: ยังคง 10 chapters ครบ, ข้อละ 3 คำถามเท่านั้น,"
+                    f"\n🚨 ULTRA COMPACT: ยังคง {target_chapters} chapters ครบ, ข้อละ {target_q_per_chapter} คำถามเท่านั้น,"
                     " lesson 3-4 ประโยค, description ประโยคเดียว แต่ยังคุณภาพและภาษาเดิม"
                 )
 
@@ -333,6 +446,8 @@ Visual Style ของเกม: {style_hint} (ใช้กำหนดโทน
 
         result = validated.model_dump()
         result["language"] = lang
+        result["game_length"] = game_length
+        result["questions_per_chapter"] = target_q_per_chapter
         return result
     except Exception as e:
         print("❌ [GameDirector] Generation failed — full traceback:")
