@@ -132,12 +132,15 @@ function PixelCanvas({
   logicalHeight,
   displayWidth,
   seed,
+  redrawKey,
   draw,
 }: {
   logicalWidth: number;
   logicalHeight: number;
   displayWidth: number;
   seed: string;
+  /** เปลี่ยนค่าเมื่อต้องการ redraw โดยไม่เปลี่ยน seed (เช่น เปลี่ยน pose/เฟรม) */
+  redrawKey?: string;
   draw: (ctx: CanvasRenderingContext2D, rng: () => number) => void;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
@@ -155,7 +158,7 @@ function PixelCanvas({
 
     draw(ctx, mulberry32(hashString(seed)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [seed, styleKey(draw)]);
+  }, [seed, redrawKey, styleKey(draw)]);
 
   const displayHeight = Math.round((displayWidth * logicalHeight) / logicalWidth);
 
@@ -1196,11 +1199,12 @@ interface AnimatedPixelSpriteProps {
   frameRate?: number;
 }
 
+// offset ต้องอยู่ในขอบ canvas (16x16 / 24x24) — เดิม x=32/48 ทำให้ตัวละครหลุดจอตอนโจมตี
 const FRAME_OFFSETS: Record<SpriteFrame, { x: number; y: number }> = {
   idle: { x: 0, y: 0 },
-  walk: { x: 16, y: 0 },
-  attack: { x: 32, y: 0 },
-  hit: { x: 48, y: 0 },
+  walk: { x: 0, y: 0 },
+  attack: { x: 2, y: -1 },
+  hit: { x: -1, y: 1 },
 };
 
 export function AnimatedPixelSprite({
@@ -1213,22 +1217,12 @@ export function AnimatedPixelSprite({
   frameRate = 120,
 }: AnimatedPixelSpriteProps) {
   const theme = getTheme(style || "pixel_art");
-  const [animFrame, setAnimFrame] = React.useState<SpriteFrame>(frame);
-  const [walkIndex, setWalkIndex] = React.useState(0);
-
-  React.useEffect(() => {
-    if (frame === "walk" || frame === "attack") {
-      const id = setInterval(() => {
-        setWalkIndex((i) => (i + 1) % 2);
-        setAnimFrame((f) => (f === "attack" ? "attack" : "walk"));
-      }, frameRate);
-      return () => clearInterval(id);
-    }
-    setAnimFrame(frame);
-  }, [frame, frameRate]);
-
-  const offset = FRAME_OFFSETS[animFrame];
+  const offset = FRAME_OFFSETS[frame];
   const draw = makeSpriteDrawer(kind, theme);
+
+  // ไม่ใช้ seed ที่เปลี่ยนตามเฟรม — กันสี/หน้าตาตัวละครกระพริบไปมา
+  // animation ใช้ offset + CSS (lunge/float) แทน
+  void frameRate;
 
   return (
     <span
@@ -1239,7 +1233,8 @@ export function AnimatedPixelSprite({
         logicalWidth={kind === "boss" ? 24 : 16}
         logicalHeight={kind === "boss" ? 24 : 16}
         displayWidth={size}
-        seed={`${style || ""}|${kind}|${seed}|${walkIndex}`}
+        seed={`${style || ""}|${kind}|${seed}`}
+        redrawKey={frame}
         draw={(ctx, rng) => {
           ctx.save();
           ctx.translate(offset.x, offset.y);

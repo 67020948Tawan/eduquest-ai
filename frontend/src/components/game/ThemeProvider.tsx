@@ -40,6 +40,7 @@ const THEME_LABELS: Record<VisualStyle, string> = {
 };
 
 const DEFAULT_STYLE: VisualStyle = "pixel_art";
+const ALL_STYLES = Object.keys(THEME_LABELS) as VisualStyle[];
 const THEME_UNLOCK_XP: Record<VisualStyle, number> = {
   pixel_art: 0,
   modern_2d: 200,
@@ -69,7 +70,8 @@ const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [style, setStyleState] = useState<VisualStyle>(DEFAULT_STYLE);
-  const [unlocked, setUnlocked] = useState<VisualStyle[]>([DEFAULT_STYLE]);
+  // เปิดให้เลือกได้ทุกธีม (กันปัญหาธีมถูกล็อกถาวรเพราะ XP ฝั่ง client ไม่เคยเพิ่ม)
+  const [unlocked, setUnlocked] = useState<VisualStyle[]>(ALL_STYLES);
   const [xp, setXp] = useState(0);
   const [level, setLevel] = useState(1);
 
@@ -82,11 +84,6 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
         if (parsed && typeof parsed === "string" && parsed in THEME_LABELS) {
           setStyleState(parsed as VisualStyle);
         }
-      }
-      const u = localStorage.getItem("eduquest_unlocked");
-      if (u) {
-        const arr = JSON.parse(u) as VisualStyle[];
-        if (arr.length) setUnlocked(arr);
       }
       const x = localStorage.getItem("eduquest_xp");
       if (x) setXp(Number(x));

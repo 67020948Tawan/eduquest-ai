@@ -8,6 +8,7 @@ import { PixelSprite, PixelScene, BattleStage, type BattlePhase } from "@/compon
 import BasePanel from "@/components/game/BasePanel";
 import DialogueBox, { type DialogueNpc } from "@/components/game/DialogueBox";
 import WorldMapView, { type MapNode } from "@/components/game/WorldMapView";
+import { useTheme } from "@/components/game/ThemeProvider";
 import { useAuthToken } from "@/lib/useAuthToken";
 import {
   getCourseStructure,
@@ -107,6 +108,19 @@ function CoursePlayInner() {
   // RPG dialogue + toasts
   const [dialogue, setDialogue] = useState<DialogueNpc | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
+
+  // XP ที่ได้ระหว่างเล่น → อัปเดตแถบ XP/เลเวลบน header (Gamification)
+  const { addXP } = useTheme();
+  const lastSyncedXpRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (lastSyncedXpRef.current === null) {
+      lastSyncedXpRef.current = xp;
+      return;
+    }
+    const delta = xp - lastSyncedXpRef.current;
+    if (delta > 0) addXP(delta);
+    lastSyncedXpRef.current = xp;
+  }, [xp, addXP]);
 
   function pushToast(msg: string, ok = true) {
     const id = ++toastId;
@@ -430,8 +444,10 @@ function CoursePlayInner() {
   }
 
   function isChapterUnlocked(chapter: ChapterView, index: number): boolean {
-    if (index === 0) return true;
-    return completedChapters.includes(data!.chapters[index - 1].chapter_id);
+    if (index <= 0) return true;
+    const prev = data?.chapters[index - 1];
+    if (!prev) return false;
+    return completedChapters.includes(prev.chapter_id);
   }
 
   // ---- Render guards ----

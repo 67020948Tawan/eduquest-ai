@@ -6,15 +6,49 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 import { useAuthToken } from "@/lib/useAuthToken";
 import { getCachedUser, logout, type CurrentUser } from "@/lib/api";
 import { useTheme } from "@/components/game/ThemeProvider";
 import { PixelXPBar } from "@/components/PixelArt";
 
+const THEME_EMOJI: Record<string, string> = {
+  pixel_art: "🟦",
+  modern_2d: "🎬",
+  fantasy: "🧝",
+  scifi: "🚀",
+  halloween: "🎃",
+  cyberpunk: "🤖",
+  christmas: "🎄",
+  summer: "☀️",
+  ocean: "🌊",
+  neon: "⚡",
+};
+
 export default function SiteHeader() {
   const router = useRouter();
   const token = useAuthToken();
-  const { style, setStyle, xp, level, nextLevelXP, unlocked, isUnlocked, label } = useTheme();
+  const { style, setStyle, xp, level, nextLevelXP, unlocked, label } = useTheme();
+  const [themeOpen, setThemeOpen] = useState(false);
+  const themeRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!themeOpen) return;
+    function onDocClick(e: MouseEvent) {
+      if (themeRef.current && !themeRef.current.contains(e.target as Node)) {
+        setThemeOpen(false);
+      }
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setThemeOpen(false);
+    }
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [themeOpen]);
 
   let user: CurrentUser | null = null;
   if (token) user = getCachedUser();
@@ -50,36 +84,47 @@ export default function SiteHeader() {
               </Link>
               <span className="hidden text-sm text-slate-500 sm:block">👤 {user.name}</span>
 
-              {/* Theme switcher dropdown (เฉพาะธีมที่ปลดล็อกแล้ว) */}
-              <div className="relative inline-block">
+              {/* Theme switcher dropdown */}
+              <div ref={themeRef} className="relative inline-block">
                 <button
-                  onClick={() => {
-                    const next = unlocked.find((s) => s !== style) || unlocked[0];
-                    setStyle(next);
-                  }}
+                  onClick={() => setThemeOpen((v) => !v)}
+                  aria-haspopup="listbox"
+                  aria-expanded={themeOpen}
                   className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-slate-300 transition hover:text-white hover:bg-slate-800"
                 >
-                  <span className="text-lg">{style === "pixel_art" ? "🟦" : "🎨"}</span>
+                  <span className="text-lg">{THEME_EMOJI[style] ?? "🎨"}</span>
                   <span className="text-xs font-semibold uppercase tracking-wider text-indigo-300">
                     {label(style)}
                   </span>
-                  <span className="text-[10px]">▾</span>
+                  <span className={`text-[10px] transition-transform ${themeOpen ? "rotate-180" : ""}`}>▾</span>
                 </button>
-                <div className="absolute right-0 mt-1 w-48 rounded-lg border border-slate-700 bg-slate-950 py-1 shadow-xl z-20">
-                  {unlocked.map((s) => (
-                    <button
-                      key={s}
-                      onClick={() => setStyle(s)}
-                      className={`flex items-center gap-2 px-3 py-2 text-sm transition ${
-                        s === style ? "bg-indigo-600/30 text-white" : "text-slate-400 hover:bg-slate-800 hover:text-white"
-                      }`}
-                    >
-                      <span>{s === "pixel_art" ? "🟦" : s === "halloween" ? "🎃" : s === "cyberpunk" ? "🤖" : s === "christmas" ? "🎄" : s === "summer" ? "☀️" : s === "ocean" ? "🌊" : s === "neon" ? "⚡" : s === "fantasy" ? "🧝" : s === "modern_2d" ? "🎬" : "🎨"}</span>
-                      {label(s)}
-                      {s === style && <span className="ml-auto text-xs text-indigo-300">ใช้อยู่</span>}
-                    </button>
-                  ))}
-                </div>
+                {themeOpen && (
+                  <div
+                    role="listbox"
+                    className="absolute right-0 z-50 mt-1 max-h-72 w-52 overflow-y-auto rounded-lg border border-slate-700 bg-slate-950 py-1 shadow-xl"
+                  >
+                    {unlocked.map((s) => (
+                      <button
+                        key={s}
+                        role="option"
+                        aria-selected={s === style}
+                        onClick={() => {
+                          setStyle(s);
+                          setThemeOpen(false);
+                        }}
+                        className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition ${
+                          s === style
+                            ? "bg-indigo-600/30 text-white"
+                            : "text-slate-400 hover:bg-slate-800 hover:text-white"
+                        }`}
+                      >
+                        <span>{THEME_EMOJI[s] ?? "🎨"}</span>
+                        <span className="truncate">{label(s)}</span>
+                        {s === style && <span className="ml-auto text-xs text-indigo-300">ใช้อยู่</span>}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <button

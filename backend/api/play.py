@@ -394,8 +394,8 @@ async def start_or_resume_session(
     # 🔥 Gamification: อัปเดต streak ของ user (Hook Model — Investment)
     from datetime import datetime, timezone
     now_utc = datetime.now(timezone.utc)
-    current_user.last_played_at = now_utc
     new_streak, new_longest, streak_increased = _calculate_streak(current_user)
+    current_user.last_played_at = now_utc
     current_user.current_streak = new_streak
     current_user.longest_streak = new_longest
 
@@ -635,10 +635,11 @@ async def complete_chapter(
     level_info = _compute_level(session.xp, list(levels_result.scalars().all()))
 
     # ---- ตรวจ Badge ใหม่ ----
-    badges_result = await db.execute(select(Badge).where(Badge.course_id == session.course_id))
+    course_id = session.course_id
+    badges_result = await db.execute(select(Badge).where(Badge.course_id == course_id))
     earned_badges = []
     total_chapters = len((await db.execute(
-        select(Chapter).where(Chapter.course_id == session.course_id)
+        select(Chapter).where(Chapter.course_id == course_id)
     )).scalars().all())
 
     for bd in badges_result.scalars().all():
@@ -653,8 +654,8 @@ async def complete_chapter(
             earned = True
         elif checkpoint_bonus > 0 and len(completed) >= 1 and ("first" in hint or "begin" in hint or "start" in hint):
             earned = True
-    if earned:
-        earned_badges.append({"name": name, "description": bd.description})
+        if earned:
+            earned_badges.append({"name": name, "description": bd.description})
 
     # 🔥 Persist badges ที่ได้รับใหม่ลง user_badges (กันซ้ำ)
     new_badges = await _persist_earned_badges(current_user, course_id, earned_badges, db)
@@ -888,8 +889,8 @@ async def finish_session(
     # 🔥 อัปเดต streak เมื่อจบเกม
     from datetime import datetime, timezone
     now_utc = datetime.now(timezone.utc)
-    current_user.last_played_at = now_utc
     new_streak, new_longest, streak_increased = _calculate_streak(current_user)
+    current_user.last_played_at = now_utc
     current_user.current_streak = new_streak
     current_user.longest_streak = new_longest
 
