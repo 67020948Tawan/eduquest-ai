@@ -14,6 +14,7 @@ from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.attributes import flag_modified
 
 from database import get_db
 from models.user import User
@@ -205,6 +206,8 @@ async def _grant_item(
         stat_bonus=item.get("stat_bonus", {}),
         equipped=False,
     ))
+    # flush เพื่อให้ query ไอเทมที่เพิ่งแจกเห็นทันที (autoflush ไม่การันตีใน async)
+    await db.flush()
     return {"key": item_key, **item}
 
 
@@ -554,6 +557,8 @@ async def start_or_resume_session(
     current_user.longest_streak = new_longest
 
     session.game_state = sanitize_game_state(state)
+    # state ถูก mutate in-place ระหว่างแจกไอเทม → บังคับให้ SQLAlchemy บันทึก JSON
+    flag_modified(session, "game_state")
     await db.commit()
     await db.refresh(session)
     await db.refresh(current_user)
