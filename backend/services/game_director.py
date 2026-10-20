@@ -204,6 +204,33 @@ def _build_supplement_question(data: dict, expected_type: str) -> QuizQuestionAI
         return None
 
 
+def _shuffle_ordering_questions(validated: CourseGenerationAI) -> None:
+    """สลับลำดับ ordering_items ให้ผู้เล่นต้องเรียงจริง และคงเฉลยที่ถูกต้องไว้"""
+    for chapter in validated.chapters:
+        for q in chapter.quiz_questions:
+            if q.question_type != "ordering":
+                continue
+            items = list(q.ordering_items or [])
+            if len(items) < 3 or len(set(items)) != len(items):
+                continue
+
+            raw_order = q.correct_data
+            valid_order = (
+                isinstance(raw_order, list)
+                and len(raw_order) == len(items)
+                and sorted(raw_order) == list(range(len(items)))
+            )
+            ordered_texts = (
+                [items[i] for i in raw_order] if valid_order else items[:]
+            )
+            original = items[:]
+            random.shuffle(items)
+            if items == original:
+                items = items[1:] + items[:1]
+            q.ordering_items = items
+            q.correct_data = [items.index(text) for text in ordered_texts]
+
+
 async def _ensure_question_type_coverage(
     validated: CourseGenerationAI,
     required_types: list[str],
@@ -710,6 +737,7 @@ Visual Style ของเกม: {style_hint} (ใช้กำหนดโทน
         await _ensure_question_type_coverage(
             validated, question_types, source, lang, provider
         )
+        _shuffle_ordering_questions(validated)
 
         # Post-validate: zones ต้องครอบคลุมทุก chapter (Learning Coverage — ข้อ #43)
         chapter_count = len(validated.chapters)

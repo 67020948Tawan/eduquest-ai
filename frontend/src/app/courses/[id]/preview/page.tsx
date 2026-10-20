@@ -97,6 +97,7 @@ function CoursePlayInner() {
   const [qIndex, setQIndex] = useState(0); // การ์ดคำถามแสดงทีละใบ
   const [hints, setHints] = useState<Record<number, number[]>>({});
   const [hintLoading, setHintLoading] = useState<number | null>(null);
+  const [draggingOrder, setDraggingOrder] = useState<{ qid: number; itemIndex: number } | null>(null);
 
   // Combat state
   const [enemyHp, setEnemyHp] = useState(0);
@@ -177,7 +178,7 @@ function CoursePlayInner() {
     const hydratedResults: Record<number, AnswerResult> = {};
     for (const [qidStr, rec] of Object.entries(session.answered || {})) {
       const r = rec as AnsweredRecord & {
-        correct_data: Record<string, string> | string[] | null;
+        correct_data: Record<string, string> | number[] | null;
         matching_pairs: Array<{ left: string; right: string }> | null;
         ordering_items: string[] | null;
         question_type: QuestionType;
@@ -1357,7 +1358,26 @@ function CoursePlayInner() {
                     const items = q.ordering_items ?? [];
                     const stored = Array.isArray(selectedVal) ? (selectedVal as number[]) : [];
                     const hasOrder = stored.length === items.length;
-                    const currentOrder = hasOrder ? stored : items.map((_, i) => i);
+                    const identityOrder = items.map((_, i) => i);
+                    const correctOrder = Array.isArray(q.correct_data)
+                      ? (q.correct_data as number[])
+                      : null;
+                    const correctIsIdentity =
+                      correctOrder?.length === items.length &&
+                      correctOrder.every((value, i) => value === i);
+                    // ข้อมูลเก่าที่ลำดับถูกอยู่แล้ว → สลับให้เริ่มต้นไม่ตรงเฉลย
+                    const shuffledFallback = identityOrder
+                      .map((value, i) => ({
+                        value,
+                        key: Math.abs(Math.sin((q.id + 1) * (i + 1) * 12.9898) * 10000),
+                      }))
+                      .sort((a, b) => a.key - b.key)
+                      .map((x) => x.value);
+                    const currentOrder = hasOrder
+                      ? stored
+                      : correctIsIdentity
+                        ? shuffledFallback
+                        : identityOrder;
 
                     const commitOrder = (next: number[]) => {
                       setSelected((prev) => ({ ...prev, [q.id]: next }));
@@ -1375,49 +1395,49 @@ function CoursePlayInner() {
                     return (
                       <div className="space-y-2">
                         <p className="text-xs font-semibold text-slate-400 mb-2">
-                          ลากบล็อคขึ้นลงเพื่อเรียงลำดับ หรือใช้ปุ่มลูกศร
+                          ลากบล็อคขึ้นลงได้เลย หรือใช้ปุ่มลูกศร
                         </p>
                         {currentOrder.map((itemIndex, position) => {
                           const item = items[itemIndex];
                           if (item === undefined) return null;
+                          const isDragging =
+                            draggingOrder?.qid === q.id &&
+                            draggingOrder.itemIndex === itemIndex;
                           return (
                             <div
                               key={`item-${itemIndex}`}
-                              draggable={!locked && submittingId !== q.id}
-                              onDragStart={(e) => {
+                              data-order-position={position}
+                              onPointerDown={(e) => {
                                 if (locked || submittingId === q.id) return;
-                                e.dataTransfer.effectAllowed = "move";
-                                e.dataTransfer.setData(
-                                  "text/plain",
-                                  JSON.stringify({ qid: q.id, index: itemIndex })
-                                );
-                                e.currentTarget.classList.add("opacity-50");
-                              }}
-                              onDragEnd={(e) => e.currentTarget.classList.remove("opacity-50")}
-                              onDragOver={(e) => {
-                                if (!locked && submittingId !== q.id) {
-                                  e.preventDefault();
-                                  e.dataTransfer.dropEffect = "move";
-                                }
-                              }}
-                              onDrop={(e) => {
+                                if (e.button !== 0) return;
                                 e.preventDefault();
-                                if (locked || submittingId === q.id) return;
-                                try {
-                                  const payload = JSON.parse(
-                                    e.dataTransfer.getData("text/plain")
-                                  ) as { qid?: number; index?: number };
-                                  if (payload.qid !== q.id || typeof payload.index !== "number") return;
-                                  const from = currentOrder.indexOf(payload.index);
-                                  moveItem(from, position);
-                                } catch {
-                                  /* ignore invalid drag payload */
-                                }
+                                e.currentTarget.setPointerCapture(e.pointerId);
+                                setDraggingOrder({ qid: q.id, itemIndex });
                               }}
-                              className={`group cursor-grab rounded-lg border px-3 py-2 text-sm transition-all active:cursor-grabbing ${
+                              onPointerMove={(e) => {
+                                if (draggingOrder?.qid !== q.id) return;
+                                const target = (
+                                  document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null
+                                )?.closest("[data-order-position]") as HTMLElement | null;
+                                if (!target) return;
+                                const to = Number(target.dataset.orderPosition);
+                                if (Number.isNaN(to)) return;
+                                const from = currentOrder.indexOf(draggingOrder.itemIndex);
+                                if (from !== -1 && from !== to) moveItem(from, to);
+                              }}
+                              onPointerUp={(e) => {
+                                e.currentTarget.releasePointerCapture(e.pointerId);
+                                setDraggingOrder(null);
+                              }}
+                              onPointerCancel={() => setDraggingOrder(null)}
+                              className={`group cursor-grab touch-none select-none rounded-lg border px-3 py-2 text-sm transition-all active:cursor-grabbing ${
                                 hasOrder
                                   ? "border-emerald-500/70 bg-emerald-950/30 text-emerald-100"
                                   : "border-slate-700 bg-slate-950 text-slate-300 hover:border-indigo-500/60"
+                              } ${
+                                isDragging
+                                  ? "pointer-events-none scale-[1.01] border-indigo-400 opacity-70 shadow-lg shadow-indigo-950/40 ring-2 ring-indigo-500"
+                                  : ""
                               }`}
                             >
                               <div className="flex items-center gap-3">
@@ -1426,12 +1446,13 @@ function CoursePlayInner() {
                                 </span>
                                 <span className="flex-1 font-medium">{item}</span>
                                 <span className="shrink-0 text-xs text-slate-500">
-                                  {hasOrder ? `อันดับ ${position + 1}` : "ลากเพื่อจัดลำดับ"}
+                                  {hasOrder ? `อันดับ ${position + 1}` : "ลากขึ้น/ลง"}
                                 </span>
                                 <div className="flex shrink-0 gap-1">
                                   <button
                                     type="button"
                                     disabled={locked || submittingId === q.id || position === 0}
+                                    onPointerDown={(e) => e.stopPropagation()}
                                     onClick={() => moveItem(position, position - 1)}
                                     className="rounded bg-slate-800 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700 disabled:opacity-40"
                                     aria-label="เลื่อนขึ้น"
@@ -1445,6 +1466,7 @@ function CoursePlayInner() {
                                       submittingId === q.id ||
                                       position === currentOrder.length - 1
                                     }
+                                    onPointerDown={(e) => e.stopPropagation()}
                                     onClick={() => moveItem(position, position + 1)}
                                     className="rounded bg-slate-800 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700 disabled:opacity-40"
                                     aria-label="เลื่อนลง"
@@ -1458,7 +1480,7 @@ function CoursePlayInner() {
                         })}
                         {!hasOrder && (
                           <p className="mt-2 text-xs text-amber-400">
-                            ลากบล็อคหรือกดลูกศรเพื่อเริ่มจัดลำดับ
+                            ลากบล็อคขึ้น/ลง หรือกดลูกศร แล้วกดส่งคำตอบ
                           </p>
                         )}
                       </div>

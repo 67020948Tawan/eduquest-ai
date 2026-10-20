@@ -656,7 +656,7 @@ export interface QuizQuestionView {
   question_type: QuestionType;
   matching_pairs: Array<{ left: string; right: string }> | null;
   ordering_items: string[] | null;
-  correct_data: Record<string, string> | string[] | null;
+  correct_data: Record<string, string> | number[] | null;
 }
 
 export interface LessonView {
@@ -871,7 +871,7 @@ export interface AnswerResult {
   correct: boolean;
   question_type: QuestionType;
   correct_answer_index: number | null;
-  correct_data: Record<string, string> | string[] | null;
+  correct_data: Record<string, string> | number[] | null;
   matching_pairs: Array<{ left: string; right: string }> | null;
   ordering_items: string[] | null;
   explanation?: string;
