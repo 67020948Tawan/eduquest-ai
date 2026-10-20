@@ -47,6 +47,187 @@ interface Toast {
 
 let toastId = 0;
 
+interface MatchLine {
+  key: string;
+  d: string;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  color: string;
+}
+
+function MatchingBoard({
+  pairs,
+  rights,
+  value,
+  disabled,
+  review,
+  correctData,
+  onChange,
+}: {
+  pairs: Array<{ left: string; right: string }>;
+  rights: string[];
+  value?: Record<string, string>;
+  disabled: boolean;
+  review: boolean;
+  correctData: Record<string, string> | null;
+  onChange: (next: Record<string, string>) => void;
+}) {
+  const boardRef = useRef<HTMLDivElement>(null);
+  const leftRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const rightRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const [lines, setLines] = useState<MatchLine[]>([]);
+
+  const selectedLeft = value?.__selectedLeft;
+  const matches = Object.entries(value ?? {}).filter(
+    ([key, right]) => key !== "__selectedLeft" && Boolean(right)
+  );
+  const pairsKey = pairs.map((p) => p.left).join("\u0000");
+  const rightsKey = rights.join("\u0000");
+
+  useEffect(() => {
+    const board = boardRef.current;
+    if (!board) return;
+
+    const compute = () => {
+      const b = board.getBoundingClientRect();
+      const next: MatchLine[] = [];
+      for (const [left, right] of matches) {
+        const leftIndex = pairs.findIndex((p) => p.left === left);
+        const rightIndex = rights.indexOf(right);
+        if (leftIndex < 0 || rightIndex < 0) continue;
+        const l = leftRefs.current[leftIndex]?.getBoundingClientRect();
+        const r = rightRefs.current[rightIndex]?.getBoundingClientRect();
+        if (!l || !r) continue;
+        const x1 = l.right - b.left;
+        const y1 = l.top + l.height / 2 - b.top;
+        const x2 = r.left - b.left;
+        const y2 = r.top + r.height / 2 - b.top;
+        const midX = (x1 + x2) / 2;
+        const isCorrect = review && correctData ? correctData[left] === right : null;
+        next.push({
+          key: `${left}->${right}`,
+          d: `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`,
+          x1,
+          y1,
+          x2,
+          y2,
+          color:
+            isCorrect === null ? "#818cf8" : isCorrect ? "#34d399" : "#fb7185",
+        });
+      }
+      setLines(next);
+    };
+
+    compute();
+    const raf = requestAnimationFrame(compute);
+    const observer = new ResizeObserver(compute);
+    observer.observe(board);
+    leftRefs.current.forEach((el) => el && observer.observe(el));
+    rightRefs.current.forEach((el) => el && observer.observe(el));
+    window.addEventListener("resize", compute);
+    return () => {
+      cancelAnimationFrame(raf);
+      observer.disconnect();
+      window.removeEventListener("resize", compute);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value, pairsKey, rightsKey, review, correctData]);
+
+  return (
+    <div ref={boardRef} className="relative mt-1">
+      <svg
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 z-0 h-full w-full overflow-visible"
+      >
+        {lines.map((line) => (
+          <g key={line.key}>
+            <path
+              d={line.d}
+              fill="none"
+              stroke={line.color}
+              strokeWidth={2.5}
+              strokeLinecap="round"
+              opacity={0.9}
+            />
+            <circle cx={line.x1} cy={line.y1} r={3.5} fill={line.color} />
+            <circle cx={line.x2} cy={line.y2} r={3.5} fill={line.color} />
+          </g>
+        ))}
+      </svg>
+
+      <div className="relative z-10 grid grid-cols-2 gap-x-7 gap-y-2 sm:gap-x-14">
+        <div className="min-w-0 space-y-2">
+          <p className="text-xs font-semibold text-slate-400">ฝั่งซ้าย</p>
+          {pairs.map((pair, i) => {
+            const isMatched = Boolean(value?.[pair.left]);
+            const isPicked = selectedLeft === pair.left;
+            return (
+              <button
+                key={`L-${i}`}
+                ref={(el) => {
+                  leftRefs.current[i] = el;
+                }}
+                type="button"
+                disabled={disabled || isMatched}
+                onClick={() => {
+                  if (disabled || isMatched) return;
+                  onChange({ ...(value ?? {}), __selectedLeft: pair.left });
+                }}
+                className={`relative w-full break-words rounded-lg border px-2.5 py-2 text-left text-xs transition-all disabled:cursor-default sm:px-3 sm:text-sm ${
+                  isMatched
+                    ? "border-emerald-500 bg-emerald-950/40 text-emerald-200"
+                    : isPicked
+                      ? "border-indigo-500 bg-indigo-950/40 text-indigo-200 ring-1 ring-indigo-500"
+                      : "border-slate-700 bg-slate-950 text-slate-300 hover:border-indigo-500/60"
+                }`}
+              >
+                {pair.left}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="min-w-0 space-y-2">
+          <p className="text-xs font-semibold text-slate-400">ฝั่งขวา</p>
+          {rights.map((right, i) => {
+            const isMatched = matches.some(([, r]) => r === right);
+            return (
+              <button
+                key={`R-${i}`}
+                ref={(el) => {
+                  rightRefs.current[i] = el;
+                }}
+                type="button"
+                disabled={disabled || isMatched}
+                onClick={() => {
+                  if (disabled || isMatched || !selectedLeft) return;
+                  const next = { ...(value ?? {}) };
+                  delete next.__selectedLeft;
+                  next[selectedLeft] = right;
+                  onChange(next);
+                }}
+                className={`relative w-full break-words rounded-lg border px-2.5 py-2 text-left text-xs transition-all disabled:cursor-default sm:px-3 sm:text-sm ${
+                  isMatched
+                    ? "border-emerald-500 bg-emerald-950/40 text-emerald-200"
+                    : "border-slate-700 bg-slate-950 text-slate-300 hover:border-indigo-500/60"
+                }`}
+              >
+                {right}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <p className="mt-3 text-[11px] text-slate-500">
+        เลือกฝั่งซ้ายก่อน แล้วเลือกฝั่งขวาเพื่อลากเส้นจับคู่
+      </p>
+    </div>
+  );
+}
+
 export default function CoursePlayPage() {
   return (
     <Suspense fallback={<div className="grid min-h-screen place-items-center bg-slate-950 text-slate-400">กำลังโหลด...</div>}>
@@ -1264,7 +1445,7 @@ function CoursePlayInner() {
                   const m = selectedVal as Record<string, string> | undefined;
                   if (!m) return false;
                   const pairs = q.matching_pairs ?? [];
-                  return Object.keys(m).length === pairs.length;
+                  return Object.keys(m).filter((key) => key !== "__selectedLeft").length === pairs.length;
                 }
                 if (qType === "ordering") {
                   const o = selectedVal as number[] | undefined;
@@ -1302,67 +1483,21 @@ function CoursePlayInner() {
 
                   {/* ===== RENDER BY TYPE ===== */}
                   {qType === "matching" && (
-                    <div className="grid gap-4 sm:grid-cols-2">
-                      <div>
-                        <p className="text-xs font-semibold text-slate-400 mb-2">ฝั่งซ้าย</p>
-                        {q.matching_pairs?.map((pair, i) => {
-                          const isMatched = Boolean(selectedVal && (selectedVal as Record<string,string>)[pair.left]);
-                          const cls = `rounded-lg border px-3 py-2 text-sm transition-all ${
-                            isMatched ? "border-emerald-500 bg-emerald-950/40 text-emerald-200" :
-                            (typeof selectedVal === "string" && (selectedVal as Record<string,string>).__selectedLeft === pair.left ? "border-indigo-500 bg-indigo-950/40" :
-                             "border-slate-700 bg-slate-950 text-slate-300 hover:border-indigo-500/60")
-                          }`;
-                          return (
-                            <button
-                              key={`L-${i}`}
-                              disabled={locked || submittingId === q.id || isMatched}
-                              onClick={() => {
-                                if (locked || submittingId === q.id) return;
-                                const cur = (selectedVal as Record<string,string>) || {};
-                                // mark left selected temporarily via a special key
-                                setSelected((prev) => ({ ...prev, [q.id]: { ...cur, __selectedLeft: pair.left } as Record<string,string> }));
-                              }}
-                              className={cls}
-                            >
-                              {pair.left}
-                            </button>
-                          );
-                        })}
-                      </div>
-                      <div>
-                        <p className="text-xs font-semibold text-slate-400 mb-2">ฝั่งขวา</p>
-                        {matchingRights.map((right, i) => {
-                          const matchedLeft = selectedVal
-                            ? Object.entries(selectedVal as Record<string,string>).find(
-                                ([key, value]) => key !== "__selectedLeft" && value === right
-                              )?.[0]
-                            : undefined;
-                          const isMatched = Boolean(matchedLeft);
-                          const cls = `rounded-lg border px-3 py-2 text-sm transition-all ${
-                            isMatched ? "border-emerald-500 bg-emerald-950/40 text-emerald-200" :
-                             "border-slate-700 bg-slate-950 text-slate-300 hover:border-indigo-500/60"
-                          }`;
-                          return (
-                            <button
-                              key={`R-${i}`}
-                              disabled={locked || submittingId === q.id || isMatched}
-                              onClick={() => {
-                                if (locked || submittingId === q.id) return;
-                                const cur = (selectedVal as Record<string,string>) || {};
-                                const leftSel = cur.__selectedLeft;
-                                const next = { ...cur };
-                                delete next.__selectedLeft;
-                                if (leftSel) next[leftSel] = right;
-                                setSelected((prev) => ({ ...prev, [q.id]: next as Record<string,string> }));
-                              }}
-                              className={cls}
-                            >
-                              {right}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
+                    <MatchingBoard
+                      pairs={q.matching_pairs ?? []}
+                      rights={matchingRights}
+                      value={selectedVal as Record<string, string> | undefined}
+                      disabled={locked || submittingId === q.id}
+                      review={Boolean(result)}
+                      correctData={
+                        result && q.correct_data && !Array.isArray(q.correct_data)
+                          ? (q.correct_data as Record<string, string>)
+                          : null
+                      }
+                      onChange={(next) =>
+                        setSelected((prev) => ({ ...prev, [q.id]: next }))
+                      }
+                    />
                   )}
 
                   {qType === "ordering" && (() => {
@@ -1537,7 +1672,14 @@ function CoursePlayInner() {
                             }
                             handleAnswer(q.id, {
                               answer_index: qType === "multiple_choice" || qType === "true_false" ? (selectedVal as number) : undefined,
-                              matching: qType === "matching" ? ((selectedVal as Record<string,string>) || {}) : undefined,
+                              matching:
+                                qType === "matching"
+                                  ? (Object.fromEntries(
+                                      Object.entries(
+                                        (selectedVal as Record<string, string>) || {}
+                                      ).filter(([key]) => key !== "__selectedLeft")
+                                    ) as Record<string, string>)
+                                  : undefined,
                               ordering: qType === "ordering" ? ((selectedVal as number[]) || []) : undefined,
                             });
                           }}
