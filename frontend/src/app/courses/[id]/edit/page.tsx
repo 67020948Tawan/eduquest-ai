@@ -29,6 +29,13 @@ const TYPE_LABEL: Record<QuestionType, string> = {
   ordering: "เรียงลำดับ",
 };
 
+const GAME_MODES = [
+  { id: "standard_quiz", title: "🧠 Standard Quiz", desc: "แบบทดสอบวัดความเข้าใจ" },
+  { id: "rpg_lore", title: "📜 RPG Adventure", desc: "โลกผจญภัย + NPC + เควสต์" },
+  { id: "turn_based", title: "⚔️ Turn-Based Combat", desc: "ตอบถูก = โจมตี ตอบผิด = โดนตี" },
+  { id: "base_building", title: "🏰 Base Building", desc: "สร้างฐาน สะสมทรัพยากร" },
+];
+
 export default function CourseEditorPage() {
   const params = useParams();
   const courseId = Number(params.id);
@@ -39,6 +46,7 @@ export default function CourseEditorPage() {
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
   const [courseTitle, setCourseTitle] = useState("");
   const [courseDescription, setCourseDescription] = useState("");
+  const [courseModes, setCourseModes] = useState<string[]>([]);
   const [newChapterTitle, setNewChapterTitle] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -53,6 +61,7 @@ export default function CourseEditorPage() {
       setData(res);
       setCourseTitle(res.course_title);
       setCourseDescription(res.course_description ?? "");
+      setCourseModes(res.game_modes ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "โหลดข้อมูลไม่สำเร็จ");
     }
@@ -71,6 +80,7 @@ export default function CourseEditorPage() {
         setData(res);
         setCourseTitle(res.course_title);
         setCourseDescription(res.course_description ?? "");
+        setCourseModes(res.game_modes ?? []);
       })
       .catch((err) => {
         if (!cancelled) setError(err instanceof Error ? err.message : "โหลดข้อมูลไม่สำเร็จ");
@@ -82,11 +92,16 @@ export default function CourseEditorPage() {
 
   async function handleSaveCourse() {
     if (!data || busy) return;
+    if (courseModes.length === 0) {
+      notify("เลือกหมวดเกมอย่างน้อย 1 หมวด", false);
+      return;
+    }
     setBusy(true);
     try {
       await updateCourse(courseId, {
         title: courseTitle.trim(),
         description: courseDescription,
+        game_modes: courseModes,
       });
       notify("บันทึกข้อมูลคอร์สแล้ว");
       await load();
@@ -199,6 +214,37 @@ export default function CourseEditorPage() {
                   rows={3}
                   className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm outline-none focus:border-indigo-500"
                 />
+                <div>
+                  <p className="mb-2 text-xs font-semibold text-slate-400">
+                    หมวดเกม (มีผลกับ UI และการเล่น)
+                  </p>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {GAME_MODES.map((mode) => {
+                      const on = courseModes.includes(mode.id);
+                      return (
+                        <button
+                          key={mode.id}
+                          type="button"
+                          onClick={() =>
+                            setCourseModes((prev) =>
+                              prev.includes(mode.id)
+                                ? prev.filter((m) => m !== mode.id)
+                                : [...prev, mode.id]
+                            )
+                          }
+                          className={`rounded-lg border-2 p-3 text-left text-sm transition-all ${
+                            on
+                              ? "border-emerald-500 bg-emerald-950/25"
+                              : "border-slate-700 bg-slate-950 hover:border-slate-500"
+                          }`}
+                        >
+                          <span className="font-bold">{mode.title}</span>
+                          <p className="mt-0.5 text-xs text-slate-500">{mode.desc}</p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
                 <button
                   onClick={handleSaveCourse}
                   disabled={busy || !courseTitle.trim()}

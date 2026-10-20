@@ -48,7 +48,12 @@ export default function CreateCoursePage() {
   const [file, setFile] = useState<File | null>(null);
   const [modes, setModes] = useState<string[]>(["rpg_lore"]);
   const [gameLength, setGameLength] = useState<GameLength>("medium");
-  const [questionTypes, setQuestionTypes] = useState<QuestionType[]>(["multiple_choice", "true_false"]);
+  const [questionTypes, setQuestionTypes] = useState<QuestionType[]>([
+    "multiple_choice",
+    "true_false",
+    "matching",
+    "ordering",
+  ]);
   const [questionsPerChapter, setQuestionsPerChapter] = useState(3);
   const [busy, setBusy] = useState(false);
   const [step, setStep] = useState(0);
@@ -96,6 +101,8 @@ export default function CreateCoursePage() {
 
   async function handleCheckContent() {
     if (!file) return setError("กรุณาใส่ไฟล์บทเรียนก่อน");
+    if (modes.length === 0) return setError("กรุณาเลือกหมวดเกมอย่างน้อย 1 หมวด");
+    if (questionTypes.length === 0) return setError("กรุณาเลือกประเภทคำถามอย่างน้อย 1 ประเภท");
 
     try {
       setError(null);
@@ -242,6 +249,45 @@ export default function CreateCoursePage() {
             </h2>
 
             <div className="space-y-4">
+              {/* Game Modes */}
+              <div className="rounded-xl border border-slate-700 bg-slate-950 p-4">
+                <h3 className="font-semibold text-slate-200 mb-3">
+                  🕹️ หมวดเกม <span className="text-xs font-normal text-slate-500">(เลือกได้หลายหมวด)</span>
+                </h3>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {GAME_MODES.map((m) => {
+                    const on = modes.includes(m.id);
+                    return (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => toggleMode(m.id)}
+                        className={`rounded-lg border-2 p-3 text-left transition-all ${
+                          on
+                            ? "border-emerald-500 bg-emerald-950/25 shadow-md shadow-emerald-950/30"
+                            : "border-slate-700 bg-slate-950 hover:border-slate-500"
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold">{m.title}</span>
+                          <span
+                            className={`grid h-5 w-5 shrink-0 place-items-center rounded-full border-2 text-[10px] ${
+                              on ? "border-emerald-400 bg-emerald-400 text-slate-950" : "border-slate-600"
+                            }`}
+                          >
+                            {on ? "✓" : ""}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-xs text-slate-500">{m.desc}</p>
+                      </button>
+                    );
+                  })}
+                </div>
+                {modes.length === 0 && (
+                  <p className="mt-2 text-xs text-rose-400">⚠️ เลือกอย่างน้อย 1 หมวดเกม</p>
+                )}
+              </div>
+
               {/* Game Length */}
               <div className="rounded-xl border border-slate-700 bg-slate-950 p-4">
                 <h3 className="font-semibold text-slate-200 mb-3">⏱️ ความยาวเกม</h3>

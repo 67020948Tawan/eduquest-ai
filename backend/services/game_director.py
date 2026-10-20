@@ -12,9 +12,11 @@
 # ==============================================================================
 
 import json
+import random
 import traceback
+from collections import Counter
 
-from schemas.generation import CourseGenerationAI, ContentSufficiencyAI
+from schemas.generation import CourseGenerationAI, ContentSufficiencyAI, QuizQuestionAI
 from services.ai_provider import get_ai_provider, AIProviderError
 from services.extractors import extract_text, ExtractionError
 
@@ -72,6 +74,278 @@ def _language_matches(text: str, expected: str) -> bool:
 def _read_source(file_path: str) -> str:
     """อ่านไฟล์ผ่าน Extraction Layer (รองรับ PDF/DOCX/PPTX/TXT จริง)"""
     return extract_text(file_path)[:MAX_SOURCE_CHARS]
+
+
+# ------------------------------------------------------------------------------
+# Question Type Coverage — รับประกันว่าทุกประเภทที่ผู้สอนเลือกมีคำถามจริง
+# ------------------------------------------------------------------------------
+
+def _clean_text(value) -> str:
+    return str(value or "").strip()
+
+
+def _build_supplement_question(data: dict, expected_type: str) -> QuizQuestionAI | None:
+    """แปลงคำถามจาก supplementary AI call → QuizQuestionAI (คืน None ถ้าข้อมูลใช้ไม่ได้)"""
+    if not isinstance(data, dict):
+        return None
+    qtype = _clean_text(data.get("question_type")) or expected_type
+    if qtype != expected_type:
+        return None
+
+    question = _clean_text(data.get("question"))
+    explanation = _clean_text(data.get("explanation"))
+    if not question or not explanation:
+        return None
+
+    options = [_clean_text(o) for o in (data.get("options") or []) if _clean_text(o)]
+    correct_index = data.get("correct_answer_index", 0)
+    try:
+        correct_index = int(correct_index)
+    except (TypeError, ValueError):
+        correct_index = 0
+
+    matching_pairs = None
+    ordering_items = None
+    correct_data = None
+
+    if qtype == "matching":
+        pairs: list[dict[str, str]] = []
+        seen_left: set[str] = set()
+        for pair in data.get("matching_pairs") or []:
+            if not isinstance(pair, dict):
+                continue
+            left = _clean_text(pair.get("left"))
+            right = _clean_text(pair.get("right"))
+            if left and right and left not in seen_left:
+                seen_left.add(left)
+                pairs.append({"left": left, "right": right})
+        if len(pairs) < 2:
+            return None
+
+        raw_correct = data.get("correct_data")
+        correct_map: dict[str, str] = {}
+        if isinstance(raw_correct, dict):
+            rights = {p["right"] for p in pairs}
+            for pair in pairs:
+                value = _clean_text(raw_correct.get(pair["left"]))
+                if value in rights:
+                    correct_map[pair["left"]] = value
+        if len(correct_map) != len(pairs):
+            correct_map = {p["left"]: p["right"] for p in pairs}
+
+        matching_pairs = pairs
+        correct_data = correct_map
+        options = ["-", "-"]
+        correct_index = 0
+
+    elif qtype == "ordering":
+        items: list[str] = []
+        for item in data.get("ordering_items") or []:
+            text = _clean_text(item)
+            if text and text not in items:
+                items.append(text)
+        if len(items) < 3:
+            return None
+
+        raw_correct = data.get("correct_data")
+        valid_order = (
+            isinstance(raw_correct, list)
+            and len(raw_correct) == len(items)
+            and all(isinstance(i, int) for i in raw_correct)
+            and sorted(raw_correct) == list(range(len(items)))
+        )
+        if valid_order:
+            order = list(raw_correct)
+        else:
+            # AI ไม่ส่งเฉลยที่ใช้ได้ — สลับ items แล้วคำนวณเฉลยให้เอง
+            shuffled = items[:]
+            random.shuffle(shuffled)
+            order = [shuffled.index(item) for item in items]
+            items = shuffled
+
+        ordering_items = items
+        correct_data = order
+        options = ["-", "-"]
+        correct_index = 0
+
+    elif qtype == "true_false":
+        options = options[:2] if len(options) >= 2 else ["จริง", "เท็จ"]
+        correct_index = correct_index if 0 <= correct_index < len(options) else 0
+
+    else:
+        if len(options) < 2 or not (0 <= correct_index < len(options)):
+            return None
+
+    difficulty = _clean_text(data.get("difficulty")) or "medium"
+    if difficulty not in ("easy", "medium", "hard"):
+        difficulty = "medium"
+    try:
+        points = max(1, int(data.get("points", 50)))
+    except (TypeError, ValueError):
+        points = 50
+
+    try:
+        return QuizQuestionAI(
+            question=question,
+            options=options,
+            correct_answer_index=correct_index,
+            explanation=explanation,
+            difficulty=difficulty,
+            points=points,
+            source_reference=_clean_text(data.get("source_reference")) or "เนื้อหาบทเรียน",
+            concept=_clean_text(data.get("concept")) or None,
+            question_type=qtype,
+            matching_pairs=matching_pairs,
+            ordering_items=ordering_items,
+            correct_data=correct_data,
+        )
+    except Exception as exc:
+        print(f"⚠️ [GameDirector] Invalid supplementary question: {exc}")
+        return None
+
+
+async def _ensure_question_type_coverage(
+    validated: CourseGenerationAI,
+    required_types: list[str],
+    source: str,
+    lang: str,
+    provider,
+) -> None:
+    """
+    AI หลักมักสร้างแค่ multiple_choice/true_false เพราะ output limit
+    → ตรวจสัดส่วนคำถามแต่ละประเภท ถ้าน้อยเกินไป ให้เรียก AI รอบเล็กสร้างเพิ่ม
+      แล้วแทนที่คำถามเดิม (คงจำนวนข้อต่อบทเดิม) หรือ append ถ้าจำเป็น
+    """
+    chapters = validated.chapters
+    counts = Counter(
+        q.question_type or "multiple_choice"
+        for chapter in chapters
+        for q in chapter.quiz_questions
+    )
+    total_questions = sum(counts.values())
+    if total_questions == 0:
+        return
+
+    # เป้าหมายขั้นต่ำต่อประเภท: อย่างน้อย 2 ข้อ และไม่น้อยกว่า ~ครึ่งของสัดส่วนที่เท่ากัน
+    per_type_target = max(2, total_questions // (len(required_types) * 2))
+    needed = {
+        qt: max(0, per_type_target - counts.get(qt, 0))
+        for qt in required_types
+    }
+    plan: list[str] = []
+    for qt, amount in needed.items():
+        plan.extend([qt] * amount)
+    if not plan:
+        return
+
+    # กระจายประเภทที่ขาดสลับกันไปตาม chapter
+    assignment = [
+        (i % len(chapters), qtype) for i, qtype in enumerate(plan)
+    ]
+    language_rule = LANGUAGE_NAMES.get(lang, lang)
+    plan_text = "\n".join(
+        f"- chapter_index {idx}: {qtype}" for idx, qtype in assignment
+    )
+    schema_hint = """{"questions": [
+  {"chapter_index": 0, "question_type": "matching", "question": "...", "explanation": "...",
+   "difficulty": "easy|medium|hard", "points": 50, "source_reference": "...",
+   "matching_pairs": [{"left": "...", "right": "..."}], "correct_data": {"left": "right"}},
+  {"chapter_index": 1, "question_type": "ordering", "question": "...", "explanation": "...",
+   "difficulty": "easy|medium|hard", "points": 50, "source_reference": "...",
+   "ordering_items": ["...", "..."], "correct_data": [2, 0, 1]},
+  {"chapter_index": 2, "question_type": "true_false", "question": "...", "explanation": "...",
+   "options": ["จริง", "เท็จ"], "correct_answer_index": 0, "source_reference": "..."},
+  {"chapter_index": 3, "question_type": "multiple_choice", "question": "...", "explanation": "...",
+   "options": ["...", "...", "...", "..."], "correct_answer_index": 1, "source_reference": "..."}
+]}"""
+
+    prompt = f"""คุณคือ EduQuest Question Generator
+สร้างคำถามเพิ่มเพื่อให้ครบทุกประเภทที่ผู้สอนเลือก โดยอิงจากเอกสารต้นทางเท่านั้น
+
+=== เอกสารต้นทาง ===
+{source[:18000]}
+=====================
+
+ประเภทที่ต้องเสริม: {", ".join(qt for qt, amount in needed.items() if amount > 0)}
+
+แผนการสร้าง (ต้องสร้างตามจำนวนและ chapter_index นี้เท่านั้น):
+{plan_text}
+
+ข้อกำหนด:
+- สร้างทั้งหมด {len(assignment)} ข้อ ตาม chapter_index ในแผน ห้ามข้าม chapter
+- ทุกข้อต้องมี question, explanation, difficulty, points, source_reference
+- matching: ต้องมี matching_pairs อย่างน้อย 2 คู่ และ correct_data เป็น map left→right
+- ordering: ต้องมี ordering_items อย่างน้อย 3 รายการ (สลับลำดับไว้) และ correct_data เป็น array ของ index ตามลำดับที่ถูก
+- true_false: options = ["จริง","เท็จ"] และ correct_answer_index = 0 หรือ 1
+- multiple_choice: options 4 ข้อ และ correct_answer_index ชี้ข้อถูก
+- ห้ามใช้ double quote ซ้อนใน string ใช้ single quote แทน
+- ภาษา: {language_rule} เท่านั้น
+
+ตอบเป็น JSON object ตามรูปแบบนี้เท่านั้น:
+{schema_hint}"""
+
+    try:
+        raw = await provider.generate_json(
+            system_prompt=(
+                "You are a strict JSON generator. Output valid JSON only. "
+                f"All content MUST be in {language_rule}."
+            ),
+            user_prompt=prompt,
+            max_tokens=4096,
+        )
+    except AIProviderError as exc:
+        print(f"⚠️ [GameDirector] Question type supplement failed: {exc}")
+        return
+
+    raw_questions = raw.get("questions") if isinstance(raw, dict) else None
+    if not isinstance(raw_questions, list):
+        print("⚠️ [GameDirector] Question type supplement returned no questions")
+        return
+
+    remaining = list(assignment)
+    filled_chapters: set[int] = set()
+    for data in raw_questions:
+        if not isinstance(data, dict) or not remaining:
+            continue
+        raw_type = _clean_text(data.get("question_type"))
+        match_pos = next(
+            (i for i, (_, qtype) in enumerate(remaining) if qtype == raw_type),
+            None,
+        )
+        if match_pos is None:
+            match_pos = 0
+        expected_idx, expected_type = remaining.pop(match_pos)
+
+        try:
+            idx = int(data.get("chapter_index"))
+        except (TypeError, ValueError):
+            idx = expected_idx
+        if not (0 <= idx < len(chapters)):
+            idx = expected_idx
+
+        question = _build_supplement_question(data, expected_type)
+        if question is None:
+            continue
+
+        chapter = chapters[idx]
+        if chapter.quiz_questions and idx not in filled_chapters:
+            # แทนข้อสุดท้าย → จำนวนข้อต่อบทเท่าเดิม แต่ได้ประเภทที่ขาด
+            chapter.quiz_questions[-1] = question
+        elif len(chapter.quiz_questions) < 8:
+            chapter.quiz_questions.append(question)
+        else:
+            chapter.quiz_questions[-1] = question
+        filled_chapters.add(idx)
+
+    final_counts = Counter(
+        q.question_type or "multiple_choice"
+        for chapter in chapters
+        for q in chapter.quiz_questions
+    )
+    still_missing = [qt for qt in required_types if final_counts.get(qt, 0) == 0]
+    if still_missing:
+        print(f"⚠️ [GameDirector] Still missing question types: {still_missing}")
+    print(f"🎯 [GameDirector] Question type counts: {dict(final_counts)}")
 
 
 # ------------------------------------------------------------------------------
@@ -298,7 +572,10 @@ async def generate_game(
     target_q_per_chapter = length_cfg["questions_per_chapter"]
 
     # ---- Question Types ----
-    if question_types is None:
+    question_types = list(dict.fromkeys(
+        qt for qt in (question_types or []) if qt in VALID_QUESTION_TYPES
+    ))
+    if not question_types:
         question_types = ["multiple_choice"]
     # บังคับให้มี multiple_choice เสมอ (เป็น fallback)
     if "multiple_choice" not in question_types:
@@ -358,7 +635,8 @@ Visual Style ของเกม: {style_hint} (ใช้กำหนดโทน
 5. สำหรับ matching: ให้กรอก matching_pairs (array ของ {{"left":"...","right":"..."}}) และ correct_data (map left_id → right_id)
 6. สำหรับ ordering: ให้กรอก ordering_items (array ของ items ในลำดับที่ AI สุ่ม) และ correct_data (array ของ indices ตามลำดับที่ถูกต้อง)
 7. บังคับ: อย่างน้อย {target_chapters} chapters · คำถาม chapter ละ {target_q_per_chapter} ข้อ (ห้ามน้อยกว่านี้) · ถ้าเอกสารสั้นให้แตกหัวข้อย่อย/ตัวอย่าง/แบบฝึกหัดให้ครบตามเป้า อย่ายุบรวม
-8. ผสมประเภทคำถามให้หลากหลายในแต่ละบท ตามที่อนุญาตไว้ข้างต้น"""
+8. ต้องมีคำถามอย่างน้อย 1 ข้อของทุกประเภทที่ระบุไว้ข้างต้น (multiple_choice, true_false, matching, ordering ตามที่เลือก) — ห้ามสร้างแต่ multiple_choice/true_false
+9. ผสมประเภทคำถามให้หลากหลายในแต่ละบท ตามที่อนุญาตไว้ข้างต้น"""
 
     try:
         # Retry สูงสุด 3 รอบ:
@@ -427,6 +705,11 @@ Visual Style ของเกม: {style_hint} (ใช้กำหนดโทน
             return {
                 "error": "AI สร้างเกมไม่สำเร็จ (output ใหญ่เกิน/ผิดภาษาซ้ำ) — ลองอีกครั้ง หรือใช้เอกสารที่สั้นลง"
             }
+
+        # Post-validate: ต้องมีคำถามครบทุกประเภทที่เลือก (AI มักข้าม matching/ordering)
+        await _ensure_question_type_coverage(
+            validated, question_types, source, lang, provider
+        )
 
         # Post-validate: zones ต้องครอบคลุมทุก chapter (Learning Coverage — ข้อ #43)
         chapter_count = len(validated.chapters)

@@ -6,7 +6,7 @@
 # ==============================================================================
 
 from pydantic import BaseModel, Field, field_validator
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 
 
 # ------------------------------------------------------------------------------
@@ -37,8 +37,8 @@ class QuizQuestionAI(BaseModel):
     # 🔢 สำหรับ ordering — ["item1", "item2", ...] (ลำดับที่ AI สุ่มไว้ก่อน)
     ordering_items: Optional[List[str]] = None
 
-    # ✅ สำหรับ matching/ordering — เก็บคำตอบที่ถูก (รูปแบบยืดหยุ่นตามประเภท)
-    correct_data: Optional[Dict[str, Any]] = None
+    # ✅ สำหรับ matching = map left→right, ordering = list ของ index ตามลำดับ
+    correct_data: Optional[Union[Dict[str, Any], List[int]]] = None
 
     @field_validator("correct_answer_index")
     @classmethod

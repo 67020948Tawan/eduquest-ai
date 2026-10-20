@@ -1228,6 +1228,19 @@ function CoursePlayInner() {
                 !locked && (gs.resources.knowledge ?? 0) >= 1 && eliminated.length === 0;
               const isLastQ = qIndex >= chapter.quiz_questions.length - 1;
               const qType = q.question_type;
+              // สลับฝั่งขวาแบบ deterministic เพื่อไม่ให้เฉลยเรียงตรงกับฝั่งซ้าย
+              const matchingRights = (() => {
+                const rights = Array.from(
+                  new Set((q.matching_pairs ?? []).map((p) => p.right))
+                );
+                return rights
+                  .map((right, i) => ({
+                    right,
+                    key: Math.abs(Math.sin((q.id + 1) * (i + 1) * 12.9898) * 10000),
+                  }))
+                  .sort((a, b) => a.key - b.key)
+                  .map((x) => x.right);
+              })();
 
               // ---- Helper: is answer complete? ----
               const isComplete = (() => {
@@ -1306,12 +1319,16 @@ function CoursePlayInner() {
                       </div>
                       <div>
                         <p className="text-xs font-semibold text-slate-400 mb-2">ฝั่งขวา</p>
-                        {q.matching_pairs?.map((pair, i) => {
-                          const isMatched = Boolean(selectedVal && (selectedVal as Record<string,string>)[pair.left] === pair.right);
+                        {matchingRights.map((right, i) => {
+                          const matchedLeft = selectedVal
+                            ? Object.entries(selectedVal as Record<string,string>).find(
+                                ([key, value]) => key !== "__selectedLeft" && value === right
+                              )?.[0]
+                            : undefined;
+                          const isMatched = Boolean(matchedLeft);
                           const cls = `rounded-lg border px-3 py-2 text-sm transition-all ${
                             isMatched ? "border-emerald-500 bg-emerald-950/40 text-emerald-200" :
-                            (typeof selectedVal === "string" && (selectedVal as Record<string,string>).__selectedRight === pair.right ? "border-indigo-500 bg-indigo-950/40" :
-                             "border-slate-700 bg-slate-950 text-slate-300 hover:border-indigo-500/60")
+                             "border-slate-700 bg-slate-950 text-slate-300 hover:border-indigo-500/60"
                           }`;
                           return (
                             <button
@@ -1323,12 +1340,12 @@ function CoursePlayInner() {
                                 const leftSel = cur.__selectedLeft;
                                 const next = { ...cur };
                                 delete next.__selectedLeft;
-                                if (leftSel) next[leftSel] = pair.right;
+                                if (leftSel) next[leftSel] = right;
                                 setSelected((prev) => ({ ...prev, [q.id]: next as Record<string,string> }));
                               }}
                               className={cls}
                             >
-                              {pair.right}
+                              {right}
                             </button>
                           );
                         })}
