@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import SiteHeader from "@/components/SiteHeader";
@@ -55,6 +55,54 @@ const STATUS_STYLE: Record<string, string> = {
   PUBLISHED: "border-emerald-500/40 bg-emerald-950/60 text-emerald-300",
   ARCHIVED: "border-amber-500/40 bg-amber-950/60 text-amber-300",
 };
+
+function StatIcon({ path, className }: { path: ReactNode; className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      {path}
+    </svg>
+  );
+}
+
+const STAT_ICONS = {
+  chapter: (
+    <>
+      <path d="M12 7v14" />
+      <path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3Z" />
+    </>
+  ),
+  question: (
+    <>
+      <circle cx="12" cy="12" r="10" />
+      <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+      <path d="M12 17h.01" />
+    </>
+  ),
+  modes: (
+    <>
+      <line x1="6" x2="10" y1="11" y2="11" />
+      <line x1="8" x2="8" y1="9" y2="13" />
+      <line x1="15" x2="15.01" y1="12" y2="12" />
+      <line x1="18" x2="18.01" y1="10" y2="10" />
+      <path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258A4 4 0 0 0 17.32 5Z" />
+    </>
+  ),
+  readiness: (
+    <>
+      <circle cx="12" cy="12" r="10" />
+      <path d="m9 12 2 2 4-4" />
+    </>
+  ),
+} as const;
 
 export default function CourseEditorPage() {
   const params = useParams();
@@ -284,19 +332,42 @@ export default function CourseEditorPage() {
 
           <div className="relative mt-6 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
             {[
-              { icon: "📚", label: "Chapter", value: data?.chapters.length ?? 0 },
-              { icon: "❓", label: "คำถาม", value: totalQuestions },
-              { icon: "🎮", label: "โหมดเกม", value: courseModes.length },
-              { icon: "✅", label: "ความพร้อม", value: `${readiness}%` },
+              {
+                icon: STAT_ICONS.chapter,
+                tone: "border-indigo-500/25 bg-indigo-500/10 text-indigo-300",
+                label: "Chapter",
+                value: data?.chapters.length ?? 0,
+              },
+              {
+                icon: STAT_ICONS.question,
+                tone: "border-sky-500/25 bg-sky-500/10 text-sky-300",
+                label: "คำถาม",
+                value: totalQuestions,
+              },
+              {
+                icon: STAT_ICONS.modes,
+                tone: "border-fuchsia-500/25 bg-fuchsia-500/10 text-fuchsia-300",
+                label: "โหมดเกม",
+                value: courseModes.length,
+              },
+              {
+                icon: STAT_ICONS.readiness,
+                tone: "border-emerald-500/25 bg-emerald-500/10 text-emerald-300",
+                label: "ความพร้อม",
+                value: `${readiness}%`,
+              },
             ].map((stat) => (
               <div
                 key={stat.label}
                 className="rounded-2xl border border-white/10 bg-slate-950/40 px-3.5 py-3 backdrop-blur"
               >
-                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  {stat.icon} {stat.label}
+                <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  <span className={`grid h-5 w-5 shrink-0 place-items-center rounded-md border ${stat.tone}`}>
+                    <StatIcon path={stat.icon} className="h-3 w-3" />
+                  </span>
+                  {stat.label}
                 </p>
-                <p className="mt-1 text-xl font-black text-white">{stat.value}</p>
+                <p className="mt-1.5 text-xl font-black text-white">{stat.value}</p>
               </div>
             ))}
           </div>
@@ -390,7 +461,7 @@ export default function CourseEditorPage() {
               </div>
 
               <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-5">
-                <p className="text-sm font-bold text-slate-200">🚀 ทางลัด</p>
+                <p className="text-sm font-bold text-slate-200">ทางลัด</p>
                 <div className="mt-3 space-y-1.5">
                   <a
                     href="#add-chapter"
@@ -652,6 +723,7 @@ function ChapterEditor({
   const [saving, setSaving] = useState(false);
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [open, setOpen] = useState(index === 0);
 
   async function saveChapter() {
     setSaving(true);
@@ -685,14 +757,15 @@ function ChapterEditor({
   return (
     <details
       className="group overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/50 transition-all open:border-indigo-500/50 open:bg-slate-900/80 open:shadow-xl open:shadow-indigo-950/20"
-      open={index === 0}
+      open={open}
+      onToggle={(e) => setOpen(e.currentTarget.open)}
     >
       <summary className="flex list-none cursor-pointer select-none items-center gap-3 p-4 transition hover:bg-slate-900/70 sm:p-5 [&::-webkit-details-marker]:hidden">
         <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-indigo-500/30 bg-gradient-to-br from-indigo-500/20 to-fuchsia-500/10 text-xs font-black text-indigo-300">
           {index + 1}
         </span>
         <span className="min-w-0 flex-1">
-          <span className="block truncate font-semibold text-slate-100">{chapter.title}</span>
+          <span className="line-clamp-2 font-semibold leading-snug text-slate-100">{chapter.title}</span>
           <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
             <span className="rounded-full bg-slate-800/80 px-2 py-0.5 text-slate-400">
               {chapter.quiz_questions.length} คำถาม
