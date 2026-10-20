@@ -10,6 +10,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, List
+from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
@@ -23,22 +24,32 @@ from models.quiz_question import QuizQuestion
 from models.level import Level
 from models.badge import Badge
 from models.game_session import GameSession
-from core.deps import get_player
+from models.xp_transaction import XpTransaction
+from models.inventory_item import InventoryItem
+from core.deps import get_current_user, get_player
+from services.quota import quota_snapshot
 from services.game_catalog import (
     BUILDINGS,
+    CHAPTER_ITEM_REWARDS,
     COMBAT,
     COLLECT_CAP_MINUTES,
+    ITEMS,
     PASSIVE_YIELD,
     RAID,
     SKILL_STREAKS,
+    STARTER_ITEMS,
     STORAGE_CAP,
     apply_resources,
     building_effects,
     can_afford,
+    compute_attack,
     compute_correct_rewards,
+    compute_player_stats,
+    counter_damage,
     default_game_state,
     deduct_cost,
     sanitize_game_state,
+    xp_for_answer,
 )
 
 import random as _random
@@ -136,6 +147,138 @@ async def _persist_earned_badges(
     return persisted
 
 
+def _log_xp(
+    db: AsyncSession,
+    user: User,
+    course_id: int,
+    session_id: int,
+    amount: int,
+    reason: str,
+) -> None:
+    """บันทึก XP ลง ledger ทุกครั้งที่ยอดเปลี่ยน (ข้อ 3.4.3)"""
+    if not amount or amount <= 0:
+        return
+    db.add(XpTransaction(
+        user_id=user.id,
+        course_id=course_id,
+        session_id=session_id,
+        amount=int(amount),
+        reason=reason,
+    ))
+
+
+async def _owned_items(db: AsyncSession, user_id: int, course_id: int) -> list[InventoryItem]:
+    result = await db.execute(
+        select(InventoryItem).where(
+            InventoryItem.user_id == user_id,
+            InventoryItem.course_id == course_id,
+        )
+    )
+    return list(result.scalars().all())
+
+
+async def _grant_item(
+    db: AsyncSession,
+    user_id: int,
+    course_id: int,
+    item_key: str,
+) -> dict | None:
+    """มอบไอเทมให้ผู้เล่น (ถ้ายังไม่มี) — คืนข้อมูลไอเทมหรือ None"""
+    item = ITEMS.get(item_key)
+    if not item:
+        return None
+    existing = await db.execute(
+        select(InventoryItem).where(
+            InventoryItem.user_id == user_id,
+            InventoryItem.course_id == course_id,
+            InventoryItem.item_key == item_key,
+        )
+    )
+    if existing.scalars().first():
+        return None
+    db.add(InventoryItem(
+        user_id=user_id,
+        course_id=course_id,
+        item_key=item_key,
+        item_type=item["type"],
+        rarity=item.get("rarity", "common"),
+        stat_bonus=item.get("stat_bonus", {}),
+        equipped=False,
+    ))
+    return {"key": item_key, **item}
+
+
+async def _sync_equipped(
+    db: AsyncSession,
+    user_id: int,
+    course_id: int,
+    equipped: dict,
+) -> None:
+    """ให้คอลัมน์ equipped ใน DB ตรงกับ game_state"""
+    items = await _owned_items(db, user_id, course_id)
+    for row in items:
+        row.equipped = equipped.get(row.item_type) == row.item_key
+
+
+async def _inventory_payload(
+    db: AsyncSession,
+    user_id: int,
+    course_id: int,
+    state: dict,
+) -> dict:
+    rows = await _owned_items(db, user_id, course_id)
+    owned = {r.item_key for r in rows}
+    equipped = state.get("equipped") or {}
+    catalog = []
+    for key, item in ITEMS.items():
+        catalog.append({
+            "key": key,
+            "name": item["name"],
+            "icon": item["icon"],
+            "type": item["type"],
+            "rarity": item.get("rarity", "common"),
+            "stat_bonus": item.get("stat_bonus", {}),
+            "price": item.get("price", {}),
+            "description": item.get("description", ""),
+            "owned": key in owned,
+            "equipped": equipped.get(item["type"]) == key,
+        })
+    return {
+        "items": catalog,
+        "owned": sorted(owned),
+        "equipped": {"weapon": equipped.get("weapon"), "armor": equipped.get("armor")},
+        "stats": compute_player_stats(equipped),
+    }
+
+
+async def _ensure_starter_inventory(
+    db: AsyncSession,
+    user: User,
+    course_id: int,
+    state: dict,
+) -> dict:
+    """แจกไอเทมเริ่มต้น + สวมให้อัตโนมัติถ้ายังไม่ได้สวมอะไร"""
+    for key in STARTER_ITEMS:
+        await _grant_item(db, user.id, course_id, key)
+
+    equipped = dict(state.get("equipped") or {})
+    rows = await _owned_items(db, user.id, course_id)
+
+    def _first_owned(slot: str) -> str | None:
+        for row in rows:
+            if row.item_type == slot:
+                return row.item_key
+        return None
+
+    if not equipped.get("weapon"):
+        equipped["weapon"] = _first_owned("weapon")
+    if not equipped.get("armor"):
+        equipped["armor"] = _first_owned("armor")
+    state["equipped"] = equipped
+    await _sync_equipped(db, user.id, course_id, equipped)
+    return state
+
+
 # ------------------------------------------------------------------------------
 # Schemas
 # ------------------------------------------------------------------------------
@@ -148,6 +291,8 @@ class AnswerSubmit(BaseModel):
     matching: Optional[Dict[str, str]] = None
     # ordering → [index, index, ...] ตามลำดับที่ผู้เล่นเรียง
     ordering: Optional[List[int]] = None
+    # เวลาที่ใช้ตอบ (มิลลิวินาที) — ใช้คำนวณ Accuracy ตามสูตร 3.4.5
+    response_ms: Optional[int] = Field(default=None, ge=0, le=3_600_000)
 
 
 class ChapterComplete(BaseModel):
@@ -160,6 +305,10 @@ class BuildRequest(BaseModel):
 
 class HintRequest(BaseModel):
     question_id: int
+
+
+class InventoryAction(BaseModel):
+    item_key: Optional[str] = None
 
 
 # ------------------------------------------------------------------------------
@@ -386,6 +535,11 @@ async def start_or_resume_session(
     if created and not state.get("last_collected"):
         state["last_collected"] = _now_ms()
 
+    # Inventory: แจกไอเทมเริ่มต้น + สวมอุปกรณ์ให้พร้อมรบ
+    state = await _ensure_starter_inventory(db, current_user, course_id, state)
+    session.game_state = sanitize_game_state(state)
+    state = session.game_state
+
     # Raid lifecycle + production
     expire_msg = _resolve_raid_expiry(state)
     _maybe_trigger_raid(state, modes)
@@ -404,11 +558,15 @@ async def start_or_resume_session(
     await db.refresh(session)
     await db.refresh(current_user)
 
+    levels_result = await db.execute(select(Level).where(Level.course_id == course_id))
+    level_info = _compute_level(session.xp or 0, list(levels_result.scalars().all()))
+
     return {
         "session_id": session.id,
         "created": created,
         "fresh_run": created,
         "xp": session.xp or 0,
+        "level": level_info,
         "answered": await _enrich_answered(db, course_id, session.answered or {}),
         "completed_chapters": session.completed_chapters or [],
         "status": session.status,
@@ -419,6 +577,8 @@ async def start_or_resume_session(
         "pending_per_building": _pending_per_building(session.game_state or {}),
         "raid": (session.game_state or {}).get("raid"),
         "notice": expire_msg,
+        "inventory": await _inventory_payload(db, current_user.id, course_id, session.game_state or {}),
+        "player_stats": compute_player_stats((session.game_state or {}).get("equipped")),
         # Streak info
         "current_streak": current_user.current_streak,
         "longest_streak": current_user.longest_streak,
@@ -507,7 +667,19 @@ async def submit_answer(
         submitted_order = payload.ordering or []
         is_correct = submitted_order == correct_order
 
-    xp_awarded = question.points if is_correct else 0
+    # ---- Chapter context (ใช้คำนวณสูตรต่อสู้ 3.4.5) ----
+    chapter_index = (await db.execute(
+        select(Chapter.order_index).where(Chapter.id == question.chapter_id)
+    )).scalar() or 0
+    total_chapters = (await db.execute(
+        select(func.count(Chapter.id)).where(Chapter.course_id == session.course_id)
+    )).scalar() or 0
+    is_boss = total_chapters > 0 and chapter_index == total_chapters - 1
+
+    player_stats = compute_player_stats(state.get("equipped"))
+    attack_info: dict = {}
+    xp_awarded = 0
+    xp_breakdown: dict = {}
     resources_awarded = {}
     enemy_damage = 0
 
@@ -515,6 +687,21 @@ async def submit_answer(
         # ---- Combo / Skills ----
         state["combo"] = (state.get("combo") or 0) + 1
         state["best_combo"] = max(state.get("best_combo") or 0, state["combo"])
+
+        # ---- XP = XP_per_q × Accuracy × (1 + 0.1*(s-1)) ----
+        xp_awarded, xp_breakdown = xp_for_answer(
+            question.points, state["combo"], payload.response_ms
+        )
+
+        # ---- ดาเมจฝั่ง server ตามสูตร 3-1..3-5 ----
+        if "turn_based" in modes:
+            attack_info = compute_attack(
+                player_stats,
+                chapter_index,
+                state["combo"],
+                payload.response_ms,
+                is_boss=is_boss,
+            )
 
         # ---- Resource rewards (base_building) — ×ความยาก ×streak, server-side ----
         if "base_building" in modes:
@@ -531,11 +718,13 @@ async def submit_answer(
         xp_mult = 1 + effects.get("xp_multiplier", 0)
         if xp_mult > 1:
             xp_awarded = round(xp_awarded * xp_mult)
+            xp_breakdown["building_multiplier"] = round(xp_mult, 3)
     else:
         state["combo"] = 0
-        # ---- Turn-Based Combat: ตอบผิด → enemy โจมตี ----
+        xp_breakdown = {}
+        # ---- Turn-Based Combat: ตอบผิด → enemy โจมตี (CounterDamage) ----
         if "turn_based" in modes:
-            enemy_damage = _random.randint(COMBAT["enemy_damage_min"], COMBAT["enemy_damage_max"])
+            enemy_damage = counter_damage(chapter_index, is_boss)
             state["hp"] = max(0, (state.get("hp") or 0) - enemy_damage)
 
     # ---- Raid lifecycle: expiry / trigger หลังทุก interaction ----
@@ -546,9 +735,11 @@ async def submit_answer(
         "answer": payload.answer_index,
         "correct": is_correct,
         "chapter_id": question.chapter_id,
+        "response_ms": payload.response_ms,
     }
     session.answered = answered
     session.xp = (session.xp or 0) + xp_awarded
+    _log_xp(db, current_user, session.course_id, session.id, xp_awarded, "answer")
     session.game_state = sanitize_game_state(state)
     await db.commit()
 
@@ -564,9 +755,22 @@ async def submit_answer(
         "source_reference": question.source_reference,
         "points": question.points,
         "xp_awarded": xp_awarded,
+        "xp_breakdown": xp_breakdown,
         "total_xp": session.xp,
         "resources_awarded": resources_awarded,
         "enemy_damage": enemy_damage,
+        # ---- Combat formula output ----
+        "damage": attack_info.get("damage", 0),
+        "base_damage": attack_info.get("base_damage", 0),
+        "accuracy_tier": attack_info.get("accuracy_tier") or xp_breakdown.get("accuracy_tier"),
+        "accuracy_mult": attack_info.get("accuracy_mult") or xp_breakdown.get("accuracy_mult"),
+        "combo_mult": attack_info.get("combo_mult"),
+        "crit": attack_info.get("crit", False),
+        "crit_chance": attack_info.get("crit_chance"),
+        "enemy_def": attack_info.get("enemy_def"),
+        "player_stats": player_stats,
+        "chapter_index": chapter_index,
+        "is_boss": is_boss,
         "game_state": session.game_state,
         "skills": _skills_for_combo(session.game_state.get("combo", 0)),
         "defeated": "turn_based" in modes and (session.game_state.get("hp") or 0) <= 0,
@@ -612,6 +816,7 @@ async def complete_chapter(
             checkpoint_bonus += 50  # Perfect Chapter bonus
 
     session.xp = (session.xp or 0) + checkpoint_bonus
+    _log_xp(db, current_user, session.course_id, session.id, checkpoint_bonus, "chapter_bonus")
 
     # ---- Chapter clear rewards (base_building) ----
     modes = await _course_modes(db, session.course_id)
@@ -628,6 +833,19 @@ async def complete_chapter(
         )
         chapter_rewards = {"stone": 5 if perfect else 2, "crystal": 3 if perfect else 1}
         apply_resources(state, chapter_rewards)
+    session.game_state = sanitize_game_state(state)
+
+    # ---- ไอเทมรางวัลเมื่อผ่าน chapter (ครั้งแรก) ----
+    item_reward = None
+    if newly_completed:
+        reward_key = CHAPTER_ITEM_REWARDS.get(int(chapter.order_index or 0))
+        if reward_key:
+            item_reward = await _grant_item(db, current_user.id, session.course_id, reward_key)
+            equipped = dict(state.get("equipped") or {})
+            if item_reward and not equipped.get(item_reward["type"]):
+                equipped[item_reward["type"]] = item_reward["key"]
+                await _sync_equipped(db, current_user.id, session.course_id, equipped)
+            state["equipped"] = equipped
     session.game_state = sanitize_game_state(state)
 
     # ---- คำนวณ Level ----
@@ -660,6 +878,10 @@ async def complete_chapter(
     # 🔥 Persist badges ที่ได้รับใหม่ลง user_badges (กันซ้ำ)
     new_badges = await _persist_earned_badges(current_user, course_id, earned_badges, db)
 
+    inventory_payload = await _inventory_payload(
+        db, current_user.id, course_id, session.game_state or {}
+    )
+
     await db.commit()
     return {
         "message": f"Checkpoint! จบ Chapter '{chapter.title}' แล้ว",
@@ -668,6 +890,9 @@ async def complete_chapter(
         "total_xp": session.xp,
         "level": level_info,
         "badges_earned": new_badges,
+        "item_reward": item_reward,
+        "inventory": inventory_payload,
+        "player_stats": inventory_payload["stats"],
         "completed_chapters": completed,
         "progress_percent": round(len(completed) / total_chapters * 100) if total_chapters else 0,
         "chapter_rewards": chapter_rewards,
@@ -923,25 +1148,335 @@ async def get_my_progress(
     current_user: User = Depends(get_player),
     db: AsyncSession = Depends(get_db),
 ):
-    """Student Analytics (กฎข้อ #95)"""
+    """Student Analytics (กฎข้อ #95) + ประวัติ/เหรียญตรา/streak"""
     result = await db.execute(
         select(GameSession).options(selectinload(GameSession.course)).where(GameSession.user_id == current_user.id)
     )
     sessions = list(result.scalars().all())
 
     total_xp = sum(s.xp or 0 for s in sessions)
+    answered_total = 0
+    correct_total = 0
     by_course = []
     for s in sessions:
+        ans = s.answered or {}
+        answered_total += len(ans)
+        correct_total += sum(1 for a in ans.values() if a.get("correct"))
         by_course.append({
+            "session_id": s.id,
             "course_id": s.course_id,
             "course_title": s.course.title if s.course else None,
             "status": s.status,
             "xp": s.xp or 0,
             "chapters_completed": len(s.completed_chapters or []),
+            "questions_answered": len(ans),
+            "questions_correct": sum(1 for a in ans.values() if a.get("correct")),
             "last_played": s.updated_at.isoformat() if s.updated_at else None,
         })
 
-    return {"total_xp": total_xp, "sessions": by_course}
+    by_course.sort(key=lambda r: r["last_played"] or "", reverse=True)
+
+    # ---- Badges ที่ผู้เล่นได้รับ ----
+    badge_rows = await db.execute(
+        select(UserBadge, Badge, Course)
+        .join(Badge, Badge.id == UserBadge.badge_id)
+        .join(Course, Course.id == UserBadge.course_id)
+        .where(UserBadge.user_id == current_user.id)
+        .order_by(UserBadge.earned_at.desc())
+    )
+    badges = [
+        {
+            "name": bd.name,
+            "description": bd.description,
+            "course_id": course.id,
+            "course_title": course.title,
+            "earned_at": ub.earned_at.isoformat() if ub.earned_at else None,
+        }
+        for ub, bd, course in badge_rows.all()
+    ]
+
+    return {
+        "total_xp": total_xp,
+        "total_answers": answered_total,
+        "total_correct": correct_total,
+        "accuracy_percent": round(correct_total / answered_total * 100) if answered_total else 0,
+        "courses_played": len({s.course_id for s in sessions}),
+        "current_streak": current_user.current_streak or 0,
+        "longest_streak": current_user.longest_streak or 0,
+        "badges": badges,
+        "quota": quota_snapshot(current_user),
+        "sessions": by_course,
+    }
+
+
+@router.get("/courses/{course_id}/leaderboard")
+async def course_leaderboard(
+    course_id: int,
+    current_user: User = Depends(get_player),
+    db: AsyncSession = Depends(get_db),
+):
+    """อันดับผู้เล่นในคอร์ส — แสดงเฉพาะชื่อ + คะแนน (ข้อ 5.4 ในรายงาน)"""
+    course_result = await db.execute(select(Course).where(Course.id == course_id))
+    if not course_result.scalars().first():
+        raise HTTPException(status_code=404, detail="ไม่พบคอร์สเรียน")
+
+    rows = await db.execute(
+        select(
+            User.id,
+            User.name,
+            func.max(GameSession.xp).label("score"),
+            func.max(GameSession.updated_at).label("last_played"),
+        )
+        .join(GameSession, GameSession.user_id == User.id)
+        .where(GameSession.course_id == course_id)
+        .group_by(User.id, User.name)
+        .order_by(func.max(GameSession.xp).desc(), func.max(GameSession.updated_at).asc())
+    )
+
+    all_entries = rows.all()
+    entries = []
+    my_rank = None
+    for index, (uid, name, score, last_played) in enumerate(all_entries, start=1):
+        is_me = uid == current_user.id
+        if is_me:
+            my_rank = index
+        if index <= 50:
+            entries.append({
+                "rank": index,
+                "name": name,
+                "score": score or 0,
+                "is_me": is_me,
+                "last_played": last_played.isoformat() if last_played else None,
+            })
+
+    return {
+        "course_id": course_id,
+        "entries": entries,
+        "my_rank": my_rank,
+        "total_players": len(all_entries),
+    }
+
+
+# ------------------------------------------------------------------------------
+# Inventory / Equipment — อาวุธ + ชุดเกราะ มีผลกับ ATK/DEF/CRIT จริง
+# ------------------------------------------------------------------------------
+
+@router.get("/sessions/{session_id}/inventory")
+async def get_inventory(
+    session_id: int,
+    current_user: User = Depends(get_player),
+    db: AsyncSession = Depends(get_db),
+):
+    session = await _get_own_session(session_id, current_user, db)
+    state = sanitize_game_state(session.game_state or {})
+    return await _inventory_payload(db, current_user.id, session.course_id, state)
+
+
+@router.post("/sessions/{session_id}/inventory/equip")
+async def equip_item(
+    session_id: int,
+    payload: InventoryAction,
+    current_user: User = Depends(get_player),
+    db: AsyncSession = Depends(get_db),
+):
+    session = await _get_own_session(session_id, current_user, db)
+    item = ITEMS.get(payload.item_key or "")
+    if not item:
+        raise HTTPException(status_code=404, detail="ไม่รู้จักไอเทมนี้")
+
+    owned = {row.item_key for row in await _owned_items(db, current_user.id, session.course_id)}
+    if payload.item_key not in owned:
+        raise HTTPException(status_code=400, detail="คุณยังไม่ได้เป็นเจ้าของไอเทมนี้")
+
+    state = sanitize_game_state(session.game_state or {})
+    equipped = dict(state.get("equipped") or {})
+    equipped[item["type"]] = payload.item_key
+    state["equipped"] = equipped
+    session.game_state = sanitize_game_state(state)
+    await _sync_equipped(db, current_user.id, session.course_id, equipped)
+
+    # เกราะเพิ่ม Max HP → รักษา HP ส่วนที่เพิ่มให้ทันที
+    if item["type"] == "armor":
+        state = _ensure_state(session, await _course_modes(db, session.course_id))
+        session.game_state = state
+
+    await db.commit()
+    inventory = await _inventory_payload(db, current_user.id, session.course_id, session.game_state or {})
+    return {
+        "message": f"สวม {item['icon']} {item['name']} แล้ว",
+        "inventory": inventory,
+        "player_stats": inventory["stats"],
+        "game_state": session.game_state,
+    }
+
+
+@router.post("/sessions/{session_id}/inventory/unequip")
+async def unequip_item(
+    session_id: int,
+    payload: InventoryAction,
+    current_user: User = Depends(get_player),
+    db: AsyncSession = Depends(get_db),
+):
+    session = await _get_own_session(session_id, current_user, db)
+    state = sanitize_game_state(session.game_state or {})
+    equipped = dict(state.get("equipped") or {})
+
+    slot = None
+    for key in ("weapon", "armor"):
+        if equipped.get(key) == payload.item_key:
+            slot = key
+            equipped[key] = None
+            break
+    if not slot:
+        raise HTTPException(status_code=400, detail="ไอเทมนี้ไม่ได้สวมอยู่")
+
+    state["equipped"] = equipped
+    session.game_state = sanitize_game_state(state)
+    await _sync_equipped(db, current_user.id, session.course_id, equipped)
+    await db.commit()
+
+    inventory = await _inventory_payload(db, current_user.id, session.course_id, session.game_state or {})
+    return {
+        "message": "ถอดไอเทมแล้ว",
+        "inventory": inventory,
+        "player_stats": inventory["stats"],
+        "game_state": session.game_state,
+    }
+
+
+@router.post("/sessions/{session_id}/inventory/buy")
+async def buy_item(
+    session_id: int,
+    payload: InventoryAction,
+    current_user: User = Depends(get_player),
+    db: AsyncSession = Depends(get_db),
+):
+    session = await _get_own_session(session_id, current_user, db)
+    item = ITEMS.get(payload.item_key or "")
+    if not item:
+        raise HTTPException(status_code=404, detail="ไม่รู้จักไอเทมนี้")
+
+    owned = {row.item_key for row in await _owned_items(db, current_user.id, session.course_id)}
+    if payload.item_key in owned:
+        raise HTTPException(status_code=400, detail="คุณมีไอเทมนี้อยู่แล้ว")
+
+    price = item.get("price") or {}
+    state = sanitize_game_state(session.game_state or {})
+    resources = state.get("resources", {})
+    if price and not can_afford(resources, price):
+        missing = {k: v - resources.get(k, 0) for k, v in price.items() if resources.get(k, 0) < v}
+        raise HTTPException(status_code=400, detail=f"ทรัพยากรไม่พอ ขาด: {missing}")
+
+    if price:
+        deduct_cost(resources, price)
+        state["resources"] = resources
+
+    await _grant_item(db, current_user.id, session.course_id, payload.item_key)
+    session.game_state = sanitize_game_state(state)
+    await db.commit()
+
+    inventory = await _inventory_payload(db, current_user.id, session.course_id, session.game_state or {})
+    price_text = "ฟรี" if not price else ", ".join(f"{k} {v}" for k, v in price.items())
+    return {
+        "message": f"ซื้อ {item['icon']} {item['name']} สำเร็จ ({price_text})",
+        "inventory": inventory,
+        "player_stats": inventory["stats"],
+        "game_state": session.game_state,
+    }
+
+
+@router.get("/courses/{course_id}/students")
+async def course_students_report(
+    course_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """รายงานผล/ความคืบหน้ารายคนสำหรับครู (ข้อ 1.1.4 ในรายงาน)"""
+    course_result = await db.execute(
+        select(Course).where(Course.id == course_id, Course.teacher_id == current_user.id)
+    )
+    course = course_result.scalars().first()
+    if not course:
+        raise HTTPException(status_code=404, detail="ไม่พบคอร์ส หรือไม่มีสิทธิ์")
+
+    total_chapters = (await db.execute(
+        select(func.count(Chapter.id)).where(Chapter.course_id == course_id)
+    )).scalar() or 0
+
+    rows = await db.execute(
+        select(GameSession)
+        .options(selectinload(GameSession.user))
+        .where(GameSession.course_id == course_id)
+        .order_by(GameSession.updated_at.desc())
+    )
+    sessions = list(rows.scalars().all())
+
+    badge_rows = await db.execute(
+        select(UserBadge.user_id, func.count(UserBadge.id))
+        .where(UserBadge.course_id == course_id)
+        .group_by(UserBadge.user_id)
+    )
+    badge_counts = {uid: count for uid, count in badge_rows.all()}
+
+    by_user: dict[int, dict] = {}
+    for s in sessions:
+        if not s.user:
+            continue
+        entry = by_user.setdefault(s.user_id, {
+            "user_id": s.user_id,
+            "name": s.user.name,
+            "best_score": 0,
+            "best_chapters": 0,
+            "best_accuracy": 0,
+            "sessions": 0,
+            "last_played": None,
+        })
+        entry["sessions"] += 1
+        score = s.xp or 0
+        if score >= entry["best_score"]:
+            ans = s.answered or {}
+            entry["best_score"] = score
+            entry["best_chapters"] = len(s.completed_chapters or [])
+            entry["best_accuracy"] = (
+                round(sum(1 for a in ans.values() if a.get("correct")) / len(ans) * 100)
+                if ans else 0
+            )
+        played = s.updated_at.isoformat() if s.updated_at else None
+        if played and (entry["last_played"] is None or played > entry["last_played"]):
+            entry["last_played"] = played
+
+    students = []
+    for entry in by_user.values():
+        entry["badges"] = badge_counts.get(entry["user_id"], 0)
+        entry["progress_percent"] = (
+            round(entry["best_chapters"] / total_chapters * 100) if total_chapters else 0
+        )
+        entry["completed"] = total_chapters > 0 and entry["best_chapters"] >= total_chapters
+        students.append(entry)
+
+    students.sort(key=lambda r: r["best_score"], reverse=True)
+    for index, row in enumerate(students, start=1):
+        row["rank"] = index
+
+    avg_score = round(sum(s["best_score"] for s in students) / len(students)) if students else 0
+    avg_accuracy = round(sum(s["best_accuracy"] for s in students) / len(students)) if students else 0
+    completion_rate = (
+        round(sum(1 for s in students if s["completed"]) / len(students) * 100)
+        if students else 0
+    )
+
+    return {
+        "course_id": course_id,
+        "course_title": course.title,
+        "total_chapters": total_chapters,
+        "summary": {
+            "students": len(students),
+            "average_score": avg_score,
+            "average_accuracy_percent": avg_accuracy,
+            "completion_rate_percent": completion_rate,
+        },
+        "students": students,
+    }
 
 
 @router.get("/courses/{course_id}/my-session-summary")
@@ -1153,6 +1688,7 @@ async def raid_defend(
     xp_bonus = 30
 
     session.xp = (session.xp or 0) + xp_bonus
+    _log_xp(db, current_user, session.course_id, session.id, xp_bonus, "raid")
     session.game_state = sanitize_game_state(state)
     await db.commit()
 

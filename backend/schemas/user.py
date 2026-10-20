@@ -12,6 +12,10 @@ class UserResponse(BaseModel):
     name: str
     email: str
     role: str
+    plan: str = "free"
+    quota_used_today: int = 0
+    current_streak: int = 0
+    longest_streak: int = 0
 
     class Config:
         from_attributes = True

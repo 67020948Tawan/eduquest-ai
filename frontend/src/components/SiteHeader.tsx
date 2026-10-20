@@ -82,7 +82,12 @@ export default function SiteHeader() {
               >
                 My Games
               </Link>
-              <span className="hidden text-sm text-slate-500 sm:block">👤 {user.name}</span>
+              <Link
+                href="/profile"
+                className="hidden text-sm text-slate-500 transition hover:text-slate-300 sm:block"
+              >
+                👤 {user.name}
+              </Link>
 
               {/* Theme switcher dropdown */}
               <div ref={themeRef} className="relative inline-block">

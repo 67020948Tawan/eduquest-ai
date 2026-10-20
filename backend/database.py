@@ -49,6 +49,9 @@ _MISSING_COLUMN_DEFAULTS = {
         "current_streak": "INTEGER DEFAULT 0",
         "longest_streak": "INTEGER DEFAULT 0",
         "last_played_at": "TIMESTAMP WITHOUT TIME ZONE",
+        "plan": "VARCHAR DEFAULT 'free'",
+        "quota_used_today": "INTEGER DEFAULT 0",
+        "quota_reset_at": "TIMESTAMP WITHOUT TIME ZONE",
     },
     "game_sessions": {
         "game_state": "JSON DEFAULT '{}'",
@@ -64,7 +67,20 @@ _MISSING_COLUMN_DEFAULTS = {
 
 async def init_db() -> None:
     """รันตอน backend start: สร้างตารางที่ยังไม่มี + ALTER เติมคอลัมน์ใหม่ตาม _MISSING_COLUMN_DEFAULTS"""
-    from models import user, course, document, chapter, lesson, quiz_question, level, badge, game_session, user_badge  # noqa: F401
+    from models import (  # noqa: F401
+        user,
+        course,
+        document,
+        chapter,
+        lesson,
+        quiz_question,
+        level,
+        badge,
+        game_session,
+        user_badge,
+        xp_transaction,
+        inventory_item,
+    )
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

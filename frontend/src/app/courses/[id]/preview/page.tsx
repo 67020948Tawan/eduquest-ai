@@ -18,6 +18,11 @@ import {
   finishSession,
   reviveSession,
   requestHint,
+  equipItem,
+  unequipItem,
+  buyItem,
+  getLeaderboard,
+  getPublicLeaderboard,
   RESOURCE_META,
   type CourseStructure,
   type ChapterView,
@@ -26,6 +31,8 @@ import {
   type CheckpointResult,
   type GameResult,
   type GameState,
+  type InventoryPayload,
+  type Leaderboard,
   type QuestionType,
   type SessionState,
 } from "@/lib/api";
@@ -54,6 +61,7 @@ function CoursePlayInner() {
   const courseId = Number(params.id);
   // Guest mode: เปิดจาก public link — ไม่ต้อง login (progress เก็บผ่าน X-Player-Key)
   const isGuest = searchParams.get("guest") === "1";
+  const publicToken = searchParams.get("token");
   // fresh=1 มาจากลิงก์/QR (PLAY NOW) → เริ่มรอบใหม่เสมอ "เข้า 1 ครั้ง = 1 ครั้ง"
   const forceFresh = searchParams.get("fresh") === "1";
   const router = useRouter();
@@ -99,6 +107,12 @@ function CoursePlayInner() {
   const [gameOver, setGameOver] = useState(false);
   const [battlePhase, setBattlePhase] = useState<BattlePhase>("idle");
   const qCardRef = useRef<HTMLDivElement>(null);
+  const questionShownAtRef = useRef(0);
+
+  // Inventory / leaderboard
+  const [inventory, setInventory] = useState<InventoryPayload | null>(null);
+  const [leaderboard, setLeaderboard] = useState<Leaderboard | null>(null);
+  const [itemBusy, setItemBusy] = useState<string | null>(null);
 
   // Checkpoint / Result / Restart
   const [checkpoint, setCheckpoint] = useState<CheckpointResult | null>(null);
@@ -157,6 +171,7 @@ function CoursePlayInner() {
     setXp(session.xp || 0);
     setCompletedChapters(session.completed_chapters || []);
     if (session.game_state) setGs(session.game_state);
+    if (session.inventory) setInventory(session.inventory);
 
     const answered: Record<string, boolean> = {};
     const hydratedResults: Record<number, AnswerResult> = {};
@@ -185,6 +200,31 @@ function CoursePlayInner() {
     setAnsweredMap(answered);
     setResults(hydratedResults);
   }
+
+  useEffect(() => {
+    questionShownAtRef.current = performance.now();
+  }, [qIndex, activeChapter?.chapter_id]);
+
+  useEffect(() => {
+    if (!courseId || token === null) return;
+    if (isGuest) {
+      if (!publicToken) return;
+      getPublicLeaderboard(publicToken)
+        .then((b) =>
+          setLeaderboard({
+            course_id: b.course_id,
+            entries: b.entries.map((e) => ({ ...e, is_me: false, last_played: null })),
+            my_rank: null,
+            total_players: b.total_players,
+          })
+        )
+        .catch(() => setLeaderboard(null));
+      return;
+    }
+    getLeaderboard(courseId)
+      .then(setLeaderboard)
+      .catch(() => setLeaderboard(null));
+  }, [courseId, token, isGuest, publicToken]);
 
   // ---- Modes ----
   const modes = useMemo(() => data?.game_modes ?? [], [data]);
@@ -290,7 +330,15 @@ function CoursePlayInner() {
       if (!sessionId || results[questionId]) return;
       setSubmittingId(questionId);
       try {
-        const result = await submitAnswer(sessionId, { question_id: questionId, ...answerPayload });
+        const responseMs = Math.max(
+          0,
+          Math.min(3_600_000, Math.round(performance.now() - questionShownAtRef.current))
+        );
+        const result = await submitAnswer(sessionId, {
+          question_id: questionId,
+          ...answerPayload,
+          response_ms: responseMs,
+        });
         setResults((prev) => ({ ...prev, [questionId]: result }));
         setAnsweredMap((prev) => ({ ...prev, [String(questionId)]: result.correct }));
         setXp(result.total_xp);
@@ -307,11 +355,10 @@ function CoursePlayInner() {
 
         if (hasCombat) {
           if (result.correct) {
-            // ---- Hero lunge + attack ----
-            const combo = result.game_state?.combo ?? 0;
-            const mult = combo >= 5 ? 3 : combo >= 3 ? 2 : 1;
-            const dmg = Math.round(22 * mult);
+            // ---- Hero lunge + attack (ดาเมจคำนวณจาก server ตามสูตร 3.4.5) ----
+            const dmg = Math.max(0, Math.round(result.damage ?? 0));
             const next = Math.max(0, enemyHpRef.current - dmg);
+            const crit = Boolean(result.crit);
 
             setBattlePhase("hero_attack");
             setTimeout(() => setBattlePhase("idle"), 600);
@@ -319,18 +366,24 @@ function CoursePlayInner() {
             setTimeout(() => setEnemyShake(false), 400);
             setFloaty({
               id: Date.now(),
-              text: mult > 1 ? `-${dmg} ×${mult}!` : `-${dmg}`,
-              color: "#fbbf24",
+              text: `${crit ? "CRIT " : ""}-${dmg}`,
+              color: crit ? "#fb7185" : "#fbbf24",
             });
             setTimeout(() => setFloaty(null), 900);
 
             // HP ลดตาม timing ของการพุ่งชน (~55% ของ animation)
             setTimeout(() => setEnemyHp(next), 300);
 
+            if (result.accuracy_tier === "perfect") {
+              pushToast("⚡ ตอบเร็วมาก — ดาเมจเต็ม!");
+            } else if (result.accuracy_tier === "good") {
+              pushToast("👍 ตอบไว — ดาเมจ 75%");
+            }
+
             if (next <= 0 && !defeatLockRef.current) {
               defeatLockRef.current = true;
               setEnemyDefeatAnim(true);
-              pushToast(`💥 ${enemyNameRef.current} ถูกกำจัด! +25 XP bonus`);
+              pushToast(`💥 ${enemyNameRef.current} ถูกกำจัด!`);
               setTimeout(() => {
                 setEnemyDefeatAnim(false);
                 setEnemyHp(enemyMaxHpRef.current || 1);
@@ -420,6 +473,10 @@ function CoursePlayInner() {
       setXp(cp.total_xp);
       setCompletedChapters(cp.completed_chapters);
       if (cp.game_state) setGs(cp.game_state);
+      if (cp.inventory) setInventory(cp.inventory);
+      if (cp.item_reward) {
+        pushToast(`${cp.item_reward.icon} ได้รับ ${cp.item_reward.name}!`);
+      }
       const rw = cp.chapter_rewards;
       if (rw && Object.values(rw).some((v) => (v ?? 0) > 0)) {
         const parts = Object.entries(rw)
@@ -429,6 +486,22 @@ function CoursePlayInner() {
       }
     } catch (err) {
       pushToast(err instanceof Error ? err.message : "บันทึก checkpoint ไม่สำเร็จ", false);
+    }
+  }
+
+  async function handleItemAction(itemKey: string, action: "equip" | "unequip" | "buy") {
+    if (!sessionId || itemBusy) return;
+    setItemBusy(itemKey);
+    try {
+      const fn = action === "equip" ? equipItem : action === "unequip" ? unequipItem : buyItem;
+      const res = await fn(sessionId, itemKey);
+      setInventory(res.inventory);
+      setGs(res.game_state);
+      pushToast(res.message);
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : "จัดการไอเทมไม่สำเร็จ", false);
+    } finally {
+      setItemBusy(null);
     }
   }
 
@@ -736,6 +809,122 @@ function CoursePlayInner() {
                           <p className="truncate text-xs text-indigo-400">{npc.role}</p>
                           <p className="mt-1 line-clamp-2 text-sm italic text-slate-400">&ldquo;{npc.dialogue}&rdquo;</p>
                         </div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              {inventory && (
+                <section className="mt-10">
+                  <div className="mb-4 flex flex-wrap items-end justify-between gap-2">
+                    <h2 className="text-lg font-bold text-slate-300">⚔️ INVENTORY</h2>
+                    <p className="text-xs text-slate-400">
+                      ATK <span className="font-bold text-amber-300">{inventory.stats.atk}</span> · DEF{" "}
+                      <span className="font-bold text-sky-300">{inventory.stats.def}</span> · CRIT{" "}
+                      <span className="font-bold text-rose-300">{inventory.stats.crit}%</span> · HP{" "}
+                      <span className="font-bold text-emerald-300">{inventory.stats.hp}</span>
+                    </p>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    {inventory.items.map((item) => {
+                      const canBuy =
+                        !item.owned &&
+                        Object.entries(item.price).every(
+                          ([key, value]) =>
+                            (gs.resources[key as keyof typeof gs.resources] ?? 0) >= (value ?? 0)
+                        );
+                      const bonus = Object.entries(item.stat_bonus)
+                        .map(([key, value]) => `${key.toUpperCase()} +${value}`)
+                        .join(" · ");
+                      return (
+                        <div
+                          key={item.key}
+                          className={`flex gap-3 rounded-xl border p-3 transition ${
+                            item.equipped
+                              ? "border-emerald-500/50 bg-emerald-950/20"
+                              : "border-slate-800 bg-slate-900/40"
+                          }`}
+                        >
+                          <div className="grid h-12 w-12 shrink-0 place-items-center rounded-lg bg-slate-950 text-2xl">
+                            {item.icon}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-bold text-slate-200">
+                              {item.name}
+                              {item.equipped && (
+                                <span className="ml-1 text-[10px] font-bold text-emerald-400">EQUIPPED</span>
+                              )}
+                            </p>
+                            <p className="truncate text-[11px] text-slate-400">{bonus}</p>
+                            <p className="mt-0.5 truncate text-[11px] capitalize text-slate-500">
+                              {item.rarity} · {item.type}
+                            </p>
+                            <div className="mt-2 flex flex-wrap gap-1.5">
+                              {item.owned ? (
+                                item.equipped ? (
+                                  <button
+                                    onClick={() => handleItemAction(item.key, "unequip")}
+                                    disabled={itemBusy === item.key}
+                                    className="rounded-md border border-slate-700 px-2 py-1 text-[11px] text-slate-300 hover:border-slate-500 disabled:opacity-50"
+                                  >
+                                    ถอด
+                                  </button>
+                                ) : (
+                                  <button
+                                    onClick={() => handleItemAction(item.key, "equip")}
+                                    disabled={itemBusy === item.key}
+                                    className="rounded-md bg-emerald-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
+                                  >
+                                    สวมใส่
+                                  </button>
+                                )
+                              ) : (
+                                <button
+                                  onClick={() => handleItemAction(item.key, "buy")}
+                                  disabled={!canBuy || itemBusy === item.key}
+                                  className="rounded-md bg-indigo-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-40"
+                                >
+                                  ซื้อ ·{" "}
+                                  {Object.entries(item.price)
+                                    .map(([key, value]) => `${RESOURCE_META[key as keyof typeof RESOURCE_META].icon}${value}`)
+                                    .join(" ")}
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+              )}
+
+              {leaderboard && leaderboard.entries.length > 0 && (
+                <section className="mt-10">
+                  <div className="mb-4 flex items-end justify-between">
+                    <h2 className="text-lg font-bold text-slate-300">🏆 LEADERBOARD</h2>
+                    <p className="text-xs text-slate-400">
+                      {leaderboard.my_rank ? `อันดับของคุณ #${leaderboard.my_rank}` : ""} ·{" "}
+                      {leaderboard.total_players} ผู้เล่น
+                    </p>
+                  </div>
+                  <div className="overflow-hidden rounded-xl border border-slate-800">
+                    {leaderboard.entries.slice(0, 10).map((entry) => (
+                      <div
+                        key={`${entry.rank}-${entry.name}`}
+                        className={`flex items-center gap-3 border-b border-slate-800/60 px-4 py-2.5 text-sm last:border-0 ${
+                          entry.is_me ? "bg-indigo-950/40" : "bg-slate-900/30"
+                        }`}
+                      >
+                        <span className="w-8 font-bold text-slate-400">
+                          {entry.rank === 1 ? "🥇" : entry.rank === 2 ? "🥈" : entry.rank === 3 ? "🥉" : `#${entry.rank}`}
+                        </span>
+                        <span className="flex-1 truncate text-slate-200">
+                          {entry.name}
+                          {entry.is_me && <span className="ml-2 text-[11px] text-indigo-400">(คุณ)</span>}
+                        </span>
+                        <span className="font-bold text-amber-300">{entry.score.toLocaleString()} XP</span>
                       </div>
                     ))}
                   </div>

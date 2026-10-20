@@ -6,7 +6,12 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { PixelScene, PixelSprite } from "@/components/PixelArt";
-import { getPublicCourse, type CourseStructure } from "@/lib/api";
+import {
+  getPublicCourse,
+  getPublicLeaderboard,
+  type CourseStructure,
+  type PublicLeaderboard,
+} from "@/lib/api";
 
 const MODE_LABELS: Record<string, string> = {
   standard_quiz: "🧠 Quiz",
@@ -21,6 +26,7 @@ export default function PublicLanding() {
   const token = String(params.token || "");
 
   const [data, setData] = useState<CourseStructure | null>(null);
+  const [board, setBoard] = useState<PublicLeaderboard | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -36,6 +42,13 @@ export default function PublicLanding() {
       })
       .finally(() => {
         if (alive) setLoading(false);
+      });
+    getPublicLeaderboard(token)
+      .then((b) => {
+        if (alive) setBoard(b);
+      })
+      .catch(() => {
+        if (alive) setBoard(null);
       });
     return () => {
       alive = false;
@@ -72,18 +85,23 @@ export default function PublicLanding() {
   return (
     <LandingBody
       data={data}
-      // fresh=1 → ทุกครั้งที่กด PLAY NOW จากลิงก์/QR = เริ่มรอบใหม่ทันที
-      // (ไม่ resume ของคนก่อนหน้าบนเครื่อง/บัญชีเดียวกัน)
-      onPlay={() => router.push(`/courses/${data.course_id}/preview?guest=1&fresh=1`)}
+      board={board}
+      // fresh=1 → ทุกครั้งที่กด PLAY NOW จากลิงก์/QR = เริ่มรอบใหม่
+      // (ไม่ใช้ resume ข้ามเครื่อง/ข้ามรอบ เพราะนักเรียนแชร์เครื่องกัน)
+      onPlay={() =>
+        router.push(`/courses/${data.course_id}/preview?guest=1&fresh=1&token=${encodeURIComponent(token)}`)
+      }
     />
   );
 }
 
 function LandingBody({
   data,
+  board,
   onPlay,
 }: {
   data: CourseStructure;
+  board: PublicLeaderboard | null;
   onPlay: () => void;
 }) {
   const world = (data.world ?? {}) as CourseStructure["world"];
@@ -154,6 +172,30 @@ function LandingBody({
             </div>
           ))}
         </div>
+
+        {/* Leaderboard */}
+        {board && board.entries.length > 0 && (
+          <div className="mt-8 text-left">
+            <div className="mb-2 flex items-center justify-between">
+              <h2 className="text-sm font-bold text-slate-300">🏆 อันดับผู้เล่น</h2>
+              <span className="text-xs text-slate-500">{board.total_players} คน</span>
+            </div>
+            <div className="overflow-hidden rounded-xl border border-slate-800">
+              {board.entries.slice(0, 5).map((entry) => (
+                <div
+                  key={`${entry.rank}-${entry.name}`}
+                  className="flex items-center gap-3 border-b border-slate-800/60 bg-slate-900/40 px-4 py-2 text-sm last:border-0"
+                >
+                  <span className="w-7 font-bold text-slate-400">
+                    {entry.rank === 1 ? "🥇" : entry.rank === 2 ? "🥈" : entry.rank === 3 ? "🥉" : `#${entry.rank}`}
+                  </span>
+                  <span className="flex-1 truncate text-slate-300">{entry.name}</span>
+                  <span className="font-bold text-amber-300">{entry.score.toLocaleString()} XP</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* PLAY NOW */}
         <button

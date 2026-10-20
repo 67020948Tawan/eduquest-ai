@@ -10,6 +10,8 @@ import {
   listCourses,
   deleteCourse,
   publishGame,
+  archiveCourse,
+  restoreCourse,
   type CourseSummary,
 } from "@/lib/api";
 
@@ -28,6 +30,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [archivingId, setArchivingId] = useState<number | null>(null);
 
   // Publish / Share
   const [publishingId, setPublishingId] = useState<number | null>(null);
@@ -66,6 +69,25 @@ export default function DashboardPage() {
       alert(err instanceof Error ? err.message : "ลบไม่สำเร็จ");
     } finally {
       setDeletingId(null);
+    }
+  }
+
+  async function handleArchiveToggle(course: CourseSummary) {
+    const archived = course.status === "ARCHIVED";
+    if (archived && !window.confirm(`กู้คืนคอร์ส "${course.title}" ใช่ไหม?`)) return;
+    setArchivingId(course.id);
+    try {
+      const res = archived ? await restoreCourse(course.id) : await archiveCourse(course.id);
+      setCourses((prev) =>
+        prev.map((c) =>
+          c.id === course.id ? { ...c, status: res.status as CourseSummary["status"] } : c
+        )
+      );
+      notify(res.message, true);
+    } catch (err) {
+      notify(err instanceof Error ? err.message : "อัปเดตสถานะไม่สำเร็จ", false);
+    } finally {
+      setArchivingId(null);
     }
   }
 
@@ -199,6 +221,18 @@ export default function DashboardPage() {
                     >
                       ▶ Open
                     </Link>
+                    <Link
+                      href={`/courses/${course.id}/edit`}
+                      className="rounded-lg bg-slate-800 py-2 text-center text-xs font-bold text-slate-200 transition hover:bg-slate-700"
+                    >
+                      ✏️ Edit
+                    </Link>
+                    <Link
+                      href={`/courses/${course.id}/report`}
+                      className="rounded-lg bg-slate-800 py-2 text-center text-xs font-bold text-slate-200 transition hover:bg-slate-700"
+                    >
+                      📊 Report
+                    </Link>
                     {published ? (
                       <button
                         onClick={() => {
@@ -221,7 +255,23 @@ export default function DashboardPage() {
                     ) : (
                       <span />
                     )}
-                    <span />
+                    <button
+                      onClick={() => handleArchiveToggle(course)}
+                      disabled={archivingId === course.id}
+                      className="rounded-lg border border-slate-700 py-2 text-xs font-bold text-slate-300 transition hover:border-slate-500 hover:text-white disabled:opacity-50"
+                    >
+                      {archivingId === course.id
+                        ? "..."
+                        : course.status === "ARCHIVED"
+                          ? "♻️ Restore"
+                          : "📦 Archive"}
+                    </button>
+                    <Link
+                      href={`/courses/${course.id}/leaderboard`}
+                      className="rounded-lg border border-slate-700 py-2 text-center text-xs font-bold text-slate-300 transition hover:border-slate-500 hover:text-white"
+                    >
+                      🏆 Board
+                    </Link>
                   </div>
                 </div>
               );

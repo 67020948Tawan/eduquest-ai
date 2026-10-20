@@ -1,7 +1,7 @@
 import enum
 from sqlalchemy import Column, Integer, String, DateTime, Enum
 from sqlalchemy.sql import func
-from sqlalchemy.orm import relationship  # <--- เพิ่มบรรทัดนี้เข้ามาครับ!
+from sqlalchemy.orm import relationship
 from database import Base
 
 # กำหนดสิทธิ์ผู้ใช้งาน (Role)
@@ -24,6 +24,11 @@ class User(Base):
     current_streak = Column(Integer, default=0)
     longest_streak = Column(Integer, default=0)
     last_played_at = Column(DateTime(timezone=True), nullable=True)
+
+    # 💳 Freemium / โควตาการเรียก AI (ข้อ 3.4.6 / 3.4.7 ในรายงาน)
+    plan = Column(String, default="free")                 # free | pro | school
+    quota_used_today = Column(Integer, default=0)
+    quota_reset_at = Column(DateTime(timezone=True), nullable=True)
 
     # เก็บเวลาที่สร้างและอัปเดตอัตโนมัติ
     created_at = Column(DateTime(timezone=True), server_default=func.now())

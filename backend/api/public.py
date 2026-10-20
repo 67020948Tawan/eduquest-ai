@@ -8,6 +8,7 @@
 # ==============================================================================
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
@@ -17,6 +18,8 @@ from models.course import Course, CourseStatus
 from models.chapter import Chapter
 from models.level import Level
 from models.badge import Badge
+from models.game_session import GameSession
+from models.user import User
 from api.courses import _build_structure_payload
 
 router = APIRouter(tags=["public"])
@@ -39,6 +42,48 @@ async def resolve_join_code(code: str, db: AsyncSession = Depends(get_db)):
     if course.status != CourseStatus.PUBLISHED:
         raise HTTPException(status_code=403, detail="เกมนี้ยังไม่ได้เผยแพร่")
     return {"share_path": f"/play/{course.share_token}", "course_title": course.title}
+
+
+@router.get("/play/{token}/leaderboard")
+async def public_leaderboard(token: str, db: AsyncSession = Depends(get_db)):
+    """อันดับผู้เล่นแบบสาธารณะ (ชื่อ + คะแนนเท่านั้น) สำหรับหน้าเล่นเกมของนักเรียน"""
+    result = await db.execute(select(Course).where(Course.share_token == token))
+    course = result.scalars().first()
+    if not course:
+        raise HTTPException(status_code=404, detail="ไม่พบเกมนี้")
+    if course.access_mode not in ("unlisted", "public"):
+        raise HTTPException(status_code=403, detail="เกมนี้เป็นส่วนตัว")
+    if course.status != CourseStatus.PUBLISHED:
+        raise HTTPException(status_code=403, detail="เกมนี้ยังไม่ได้เผยแพร่")
+
+    rows = await db.execute(
+        select(
+            User.name,
+            func.max(GameSession.xp).label("score"),
+        )
+        .join(GameSession, GameSession.user_id == User.id)
+        .where(GameSession.course_id == course.id)
+        .group_by(User.id, User.name)
+        .order_by(func.max(GameSession.xp).desc())
+        .limit(10)
+    )
+
+    entries = [
+        {"rank": index, "name": name, "score": score or 0}
+        for index, (name, score) in enumerate(rows.all(), start=1)
+    ]
+    total_players = (await db.execute(
+        select(func.count(func.distinct(GameSession.user_id))).where(
+            GameSession.course_id == course.id
+        )
+    )).scalar() or 0
+
+    return {
+        "course_id": course.id,
+        "course_title": course.title,
+        "entries": entries,
+        "total_players": total_players,
+    }
 
 
 @router.get("/play/{token}")

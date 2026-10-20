@@ -91,6 +91,233 @@ COMBAT = {
     "defeat_xp_bonus": 25,       # โบนัสฆ่า enemy
 }
 
+# ------------------------------------------------------------------------------
+# Combat formulas (ข้อ 3.4.5 ในรายงาน)
+#   BaseDamage   = max(1, ATK - DEF)
+#   Accuracy     = 1.0 / 0.75 / 0.5 ตามเวลาตอบ
+#   ComboMult    = 1 + min(s-1, 4) * 0.15   (สูงสุด 1.6)
+#   CritChance   = CRIT/100 + 0.2 เมื่อตอบแบบ perfect
+#   TotalDamage  = round(Base * Acc * Combo * Crit)
+#   Counter      = round(enemyATK * 0.5)
+#   XP           = XP_per_q * Acc * (1 + 0.1*(s-1))
+# ------------------------------------------------------------------------------
+
+PLAYER_BASE = {"atk": 22, "def": 5, "crit": 10, "hp": 100}
+COMBO_STEP = 0.15
+COMBO_MAX_BONUS = 0.60
+ACCURACY_TIERS = (
+    (5000, 1.0, "perfect"),
+    (12000, 0.75, "good"),
+    (None, 0.5, "slow"),
+)
+ENEMY_COMBAT = {
+    "base_def": 4,
+    "def_per_chapter": 2,
+    "base_atk": 14,
+    "atk_per_chapter": 2,
+    "counter_multiplier": 0.5,
+}
+
+# ------------------------------------------------------------------------------
+# Inventory — อาวุธ / ชุดเกราะ (ข้อ 3.3.3 / 5.3 ในรายงาน)
+#   stat_bonus: atk / def / crit
+# ------------------------------------------------------------------------------
+
+ITEMS = {
+    "wooden_sword": {
+        "name": "ดาบไม้ฝึกหัด",
+        "icon": "🗡️",
+        "type": "weapon",
+        "rarity": "common",
+        "stat_bonus": {"atk": 6},
+        "price": {},
+        "description": "ดาบไม้สำหรับผู้เริ่มต้น +6 ATK",
+    },
+    "iron_sword": {
+        "name": "ดาบเหล็ก",
+        "icon": "⚔️",
+        "type": "weapon",
+        "rarity": "uncommon",
+        "stat_bonus": {"atk": 12, "crit": 2},
+        "price": {"gold": 60},
+        "description": "ดาบเหล็กคมกริบ +12 ATK +2 CRIT",
+    },
+    "flame_blade": {
+        "name": "ดาบเพลิง",
+        "icon": "🔥",
+        "type": "weapon",
+        "rarity": "rare",
+        "stat_bonus": {"atk": 18, "crit": 4},
+        "price": {"gold": 120, "crystal": 2},
+        "description": "ดาบที่ลุกโชนด้วยความรู้ +18 ATK +4 CRIT",
+    },
+    "scholar_staff": {
+        "name": "คทานักปราชญ์",
+        "icon": "🪄",
+        "type": "weapon",
+        "rarity": "epic",
+        "stat_bonus": {"atk": 24, "crit": 8},
+        "price": {"gold": 180, "knowledge": 15},
+        "description": "คทาแห่งความรู้ +24 ATK +8 CRIT",
+    },
+    "cloth_armor": {
+        "name": "เสื้อผ้าฝึกหัด",
+        "icon": "🥋",
+        "type": "armor",
+        "rarity": "common",
+        "stat_bonus": {"def": 4},
+        "price": {},
+        "description": "เสื้อผ้าธรรมดา +4 DEF",
+    },
+    "leather_armor": {
+        "name": "เกราะหนัง",
+        "icon": "🦺",
+        "type": "armor",
+        "rarity": "uncommon",
+        "stat_bonus": {"def": 8},
+        "price": {"gold": 50},
+        "description": "เกราะหนังสัตว์ +8 DEF",
+    },
+    "knight_armor": {
+        "name": "เกราะอัศวิน",
+        "icon": "🛡️",
+        "type": "armor",
+        "rarity": "rare",
+        "stat_bonus": {"def": 14, "crit": 2},
+        "price": {"gold": 100, "stone": 20},
+        "description": "เกราะอัศวินผู้กล้า +14 DEF +2 CRIT",
+    },
+    "scholar_robe": {
+        "name": "ชุดคลุมนักปราชญ์",
+        "icon": "🧥",
+        "type": "armor",
+        "rarity": "epic",
+        "stat_bonus": {"def": 20, "crit": 4},
+        "price": {"gold": 160, "knowledge": 12},
+        "description": "ชุดคลุมแห่งปัญญา +20 DEF +4 CRIT",
+    },
+}
+
+STARTER_ITEMS = ("wooden_sword", "cloth_armor")
+
+# รางวัลไอเทมเมื่อจบ chapter (ครั้งแรกเท่านั้น)
+CHAPTER_ITEM_REWARDS = {
+    0: "iron_sword",
+    1: "leather_armor",
+    3: "flame_blade",
+    5: "knight_armor",
+}
+
+
+def combo_multiplier(combo: int) -> float:
+    """ComboMult = 1 + min(s-1, 4) * 0.15 (สูงสุด 1.6)"""
+    try:
+        steps = max(0, min(int(combo) - 1, 4))
+    except (TypeError, ValueError):
+        steps = 0
+    return round(1 + steps * COMBO_STEP, 4)
+
+
+def accuracy_tier(response_ms: int | None) -> tuple[float, str]:
+    """คืน (ตัวคูณความแม่นยำ, ชื่อระดับ) จากเวลาตอบเป็นมิลลิวินาที"""
+    if response_ms is None:
+        return 1.0, "perfect"
+    try:
+        ms = max(0, int(response_ms))
+    except (TypeError, ValueError):
+        return 1.0, "perfect"
+    for limit, mult, name in ACCURACY_TIERS:
+        if limit is None or ms <= limit:
+            return mult, name
+    return 0.5, "slow"
+
+
+def compute_player_stats(equipped: dict | None) -> dict:
+    """รวม stat พื้นฐาน + โบนัสจากอาวุธ/เกราะที่สวมอยู่"""
+    equipped = equipped or {}
+    stats = dict(PLAYER_BASE)
+    for slot in ("weapon", "armor"):
+        key = equipped.get(slot)
+        item = ITEMS.get(key or "")
+        if not item or item["type"] != slot:
+            continue
+        for stat, bonus in item.get("stat_bonus", {}).items():
+            stats[stat] = stats.get(stat, 0) + bonus
+    stats["weapon"] = equipped.get("weapon") if equipped.get("weapon") in ITEMS else None
+    stats["armor"] = equipped.get("armor") if equipped.get("armor") in ITEMS else None
+    return stats
+
+
+def enemy_stats(chapter_index: int, is_boss: bool = False) -> dict:
+    """ค่า DEF/ATK ของศัตรูตามลำดับ chapter"""
+    idx = max(0, int(chapter_index))
+    if is_boss:
+        return {
+            "def": ENEMY_COMBAT["base_def"] + idx * ENEMY_COMBAT["def_per_chapter"] + 4,
+            "atk": ENEMY_COMBAT["base_atk"] + idx * ENEMY_COMBAT["atk_per_chapter"] + 6,
+        }
+    return {
+        "def": ENEMY_COMBAT["base_def"] + idx * ENEMY_COMBAT["def_per_chapter"],
+        "atk": ENEMY_COMBAT["base_atk"] + idx * ENEMY_COMBAT["atk_per_chapter"],
+    }
+
+
+def compute_attack(
+    player_stats: dict,
+    chapter_index: int,
+    combo: int,
+    response_ms: int | None,
+    is_boss: bool = False,
+    rng=None,
+) -> dict:
+    """คำนวณดาเมจโจมตีตามสูตร 3-1..3-5 (server-side เท่านั้น)"""
+    import random as _random
+
+    rng = rng or _random
+    enemy = enemy_stats(chapter_index, is_boss)
+    base_damage = max(1, int(player_stats.get("atk", PLAYER_BASE["atk"])) - enemy["def"])
+    acc_mult, acc_name = accuracy_tier(response_ms)
+    combo_mult = combo_multiplier(combo)
+
+    crit_chance = max(0.0, min(1.0, player_stats.get("crit", 0) / 100.0 + (0.2 if acc_mult >= 1.0 else 0.0)))
+    is_crit = rng.random() < crit_chance
+    crit_mult = 2.0 if is_crit else 1.0
+
+    damage = max(1, round(base_damage * acc_mult * combo_mult * crit_mult))
+    return {
+        "damage": damage,
+        "base_damage": base_damage,
+        "accuracy_mult": acc_mult,
+        "accuracy_tier": acc_name,
+        "combo_mult": combo_mult,
+        "crit_chance": round(crit_chance, 3),
+        "crit": is_crit,
+        "enemy_def": enemy["def"],
+        "enemy_atk": enemy["atk"],
+    }
+
+
+def counter_damage(chapter_index: int, is_boss: bool = False) -> int:
+    """CounterDamage = round(enemyATK × 0.5)"""
+    enemy = enemy_stats(chapter_index, is_boss)
+    return max(1, round(enemy["atk"] * ENEMY_COMBAT["counter_multiplier"]))
+
+
+def xp_for_answer(points: int, combo: int, response_ms: int | None) -> tuple[int, dict]:
+    """XP = XP_per_q × Accuracy × (1 + 0.1*(s-1))"""
+    acc_mult, acc_name = accuracy_tier(response_ms)
+    try:
+        streak = max(1, int(combo))
+    except (TypeError, ValueError):
+        streak = 1
+    bonus = 1 + 0.1 * (streak - 1)
+    xp = max(1, round(int(points) * acc_mult * bonus))
+    return xp, {
+        "accuracy_mult": acc_mult,
+        "accuracy_tier": acc_name,
+        "combo_bonus": round(bonus, 3),
+    }
+
 SKILL_STREAKS = [
     {"streak": 3, "skill": "critical_strike", "name": "🔥 Critical Strike", "desc": "Combo x3 → ดาเมจคริติคอล ×2"},
     {"streak": 5, "skill": "triple_strike", "name": "⚡ Triple Strike", "desc": "Combo x5 → ดาเมจ ×3"},
@@ -109,6 +336,7 @@ def default_game_state(max_hp: int | None = None) -> dict:
         "deaths": 0,
         "resources": dict(DEFAULT_RESOURCES),
         "buildings": [],
+        "equipped": {"weapon": None, "armor": None},
     }
 
 
@@ -159,6 +387,13 @@ def sanitize_game_state(state: dict) -> dict:
     if not (isinstance(raid, dict) and all(k in raid for k in ("name", "started_at", "ends_at"))):
         raid = None
 
+    raw_equipped = state.get("equipped") or {}
+    equipped = {}
+    for slot in ("weapon", "armor"):
+        key = raw_equipped.get(slot) if isinstance(raw_equipped, dict) else None
+        item = ITEMS.get(key or "")
+        equipped[slot] = key if item and item["type"] == slot else None
+
     return {
         "hp": hp,
         "max_hp": max_hp,
@@ -171,6 +406,7 @@ def sanitize_game_state(state: dict) -> dict:
         "raids_repelled": _int(state.get("raids_repelled")),
         "resources": resources,
         "buildings": buildings,
+        "equipped": equipped,
     }
 
 

@@ -35,6 +35,10 @@ export interface CurrentUser {
   name: string;
   email: string;
   role: string;
+  plan?: string;
+  quota_used_today?: number;
+  current_streak?: number;
+  longest_streak?: number;
 }
 
 export function getCachedUser(): CurrentUser | null {
@@ -247,6 +251,26 @@ export async function deleteCourse(courseId: number) {
   return request<{ message: string }>(`/api/courses/${courseId}`, { method: "DELETE" });
 }
 
+export async function updateCourse(
+  courseId: number,
+  payload: {
+    title?: string;
+    description?: string;
+    subject?: string;
+    difficulty?: string;
+    game_modes?: string[];
+    visual_style?: VisualStyle;
+    game_length?: GameLength;
+    question_types?: QuestionType[];
+  }
+): Promise<CourseSummary> {
+  return request<CourseSummary>(`/api/courses/${courseId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function publishCourse(courseId: number) {
   return request<CourseSummary>(`/api/courses/${courseId}`, {
     method: "PATCH",
@@ -308,6 +332,213 @@ export async function disableShareLink(courseId: number): Promise<{ message: str
   return request<{ message: string }>(`/api/courses/${courseId}/share/disable`, { method: "POST" });
 }
 
+export async function archiveCourse(courseId: number): Promise<{ message: string; status: string }> {
+  return request<{ message: string; status: string }>(`/api/courses/${courseId}/archive`, {
+    method: "POST",
+  });
+}
+
+export async function restoreCourse(courseId: number): Promise<{ message: string; status: string }> {
+  return request<{ message: string; status: string }>(`/api/courses/${courseId}/restore`, {
+    method: "POST",
+  });
+}
+
+// ------------------------------------------------------------------------------
+// Leaderboard / Teacher report
+// ------------------------------------------------------------------------------
+
+export interface LeaderboardEntry {
+  rank: number;
+  name: string;
+  score: number;
+  is_me: boolean;
+  last_played: string | null;
+}
+
+export interface Leaderboard {
+  course_id: number;
+  entries: LeaderboardEntry[];
+  my_rank: number | null;
+  total_players: number;
+}
+
+export async function getLeaderboard(courseId: number): Promise<Leaderboard> {
+  return request<Leaderboard>(`/api/courses/${courseId}/leaderboard`);
+}
+
+export interface StudentReportRow {
+  user_id: number;
+  rank: number;
+  name: string;
+  best_score: number;
+  best_chapters: number;
+  best_accuracy: number;
+  progress_percent: number;
+  badges: number;
+  sessions: number;
+  completed: boolean;
+  last_played: string | null;
+}
+
+export interface TeacherReport {
+  course_id: number;
+  course_title: string;
+  total_chapters: number;
+  summary: {
+    students: number;
+    average_score: number;
+    average_accuracy_percent: number;
+    completion_rate_percent: number;
+  };
+  students: StudentReportRow[];
+}
+
+export async function getCourseStudents(courseId: number): Promise<TeacherReport> {
+  return request<TeacherReport>(`/api/courses/${courseId}/students`);
+}
+
+// ------------------------------------------------------------------------------
+// Content editor (teacher only)
+// ------------------------------------------------------------------------------
+
+export interface EditableQuestion {
+  id: number;
+  question: string;
+  options: string[];
+  correct_answer_index: number;
+  explanation: string;
+  difficulty: string;
+  points: number;
+  source_reference: string | null;
+  question_type: QuestionType;
+  matching_pairs: Array<{ left: string; right: string }> | null;
+  ordering_items: string[] | null;
+  correct_data: Record<string, string> | number[] | null;
+}
+
+export interface EditableChapter {
+  chapter_id: number;
+  title: string;
+  order_index: number;
+  lesson: { title: string; objective: string; content: string };
+  quiz_questions: EditableQuestion[];
+}
+
+export interface CourseEditData {
+  course_id: number;
+  course_title: string;
+  course_description: string | null;
+  status: CourseStatus;
+  game_modes: string[];
+  visual_style: VisualStyle;
+  chapters: EditableChapter[];
+}
+
+export async function getCourseEditData(courseId: number): Promise<CourseEditData> {
+  return request<CourseEditData>(`/api/courses/${courseId}/edit-data`);
+}
+
+export async function createChapter(courseId: number, title: string) {
+  return request<{ message: string; chapter_id: number; republish_required: boolean }>(
+    `/api/courses/${courseId}/chapters`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title }),
+    }
+  );
+}
+
+export async function updateChapter(
+  courseId: number,
+  chapterId: number,
+  payload: {
+    title?: string;
+    lesson_title?: string;
+    lesson_objective?: string;
+    lesson_content?: string;
+  }
+) {
+  return request<{ message: string; republish_required: boolean }>(
+    `/api/courses/${courseId}/chapters/${chapterId}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export async function deleteChapter(courseId: number, chapterId: number) {
+  return request<{ message: string; republish_required: boolean }>(
+    `/api/courses/${courseId}/chapters/${chapterId}`,
+    { method: "DELETE" }
+  );
+}
+
+export async function reorderChapters(courseId: number, chapterIds: number[]) {
+  return request<{ message: string; republish_required: boolean }>(
+    `/api/courses/${courseId}/chapters/reorder`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chapter_ids: chapterIds }),
+    }
+  );
+}
+
+export interface QuestionInput {
+  question: string;
+  options?: string[];
+  correct_answer_index?: number;
+  explanation?: string;
+  difficulty?: string;
+  points?: number;
+  source_reference?: string | null;
+  question_type: QuestionType;
+  matching_pairs?: Array<{ left: string; right: string }> | null;
+  ordering_items?: string[] | null;
+  correct_data?: Record<string, string> | number[] | null;
+}
+
+export async function createQuestion(
+  courseId: number,
+  chapterId: number,
+  payload: QuestionInput
+) {
+  return request<{ message: string; question: EditableQuestion; republish_required: boolean }>(
+    `/api/courses/${courseId}/chapters/${chapterId}/questions`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export async function updateQuestion(
+  courseId: number,
+  questionId: number,
+  payload: QuestionInput
+) {
+  return request<{ message: string; question: EditableQuestion; republish_required: boolean }>(
+    `/api/courses/${courseId}/questions/${questionId}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export async function deleteQuestion(courseId: number, questionId: number) {
+  return request<{ message: string; republish_required: boolean }>(
+    `/api/courses/${courseId}/questions/${questionId}`,
+    { method: "DELETE" }
+  );
+}
+
 export function shareUrl(sharePath: string): string {
   if (typeof window === "undefined") return sharePath;
   return `${window.location.origin}${sharePath}`;
@@ -315,6 +546,17 @@ export function shareUrl(sharePath: string): string {
 
 export async function getPublicCourse(token: string): Promise<CourseStructure> {
   return request<CourseStructure>(`/play/${token}`, { auth: false });
+}
+
+export interface PublicLeaderboard {
+  course_id: number;
+  course_title: string;
+  entries: Array<{ rank: number; name: string; score: number }>;
+  total_players: number;
+}
+
+export async function getPublicLeaderboard(token: string): Promise<PublicLeaderboard> {
+  return request<PublicLeaderboard>(`/play/${token}/leaderboard`, { auth: false });
 }
 
 export const getAllCourses = listCourses;
@@ -537,6 +779,40 @@ export interface RaidInfo {
   ends_at: number;
 }
 
+export interface EquippedItems {
+  weapon: string | null;
+  armor: string | null;
+}
+
+export interface PlayerStats {
+  atk: number;
+  def: number;
+  crit: number;
+  hp: number;
+  weapon: string | null;
+  armor: string | null;
+}
+
+export interface InventoryItemView {
+  key: string;
+  name: string;
+  icon: string;
+  type: "weapon" | "armor";
+  rarity: string;
+  stat_bonus: Partial<Record<"atk" | "def" | "crit", number>>;
+  price: Partial<Resources>;
+  description: string;
+  owned: boolean;
+  equipped: boolean;
+}
+
+export interface InventoryPayload {
+  items: InventoryItemView[];
+  owned: string[];
+  equipped: EquippedItems;
+  stats: PlayerStats;
+}
+
 export interface GameState {
   hp?: number;
   max_hp?: number;
@@ -545,6 +821,7 @@ export interface GameState {
   deaths: number;
   resources: Resources;
   buildings: string[];
+  equipped?: EquippedItems;
   last_collected?: number;
   raid_cooldown_until?: number;
   raid?: RaidInfo | null;
@@ -563,6 +840,7 @@ export interface SessionState {
   created: boolean;
   fresh_run: boolean;
   xp: number;
+  level?: LevelData;
   answered: Record<string, AnsweredRecord>;
   completed_chapters: number[];
   status: string;
@@ -573,6 +851,11 @@ export interface SessionState {
   pending_per_building?: Record<string, Partial<Resources>>;
   raid?: RaidInfo | null;
   notice?: string | null;
+  inventory?: InventoryPayload;
+  player_stats?: PlayerStats;
+  current_streak?: number;
+  longest_streak?: number;
+  streak_increased?: boolean;
 }
 
 export async function startSession(
@@ -595,9 +878,26 @@ export interface AnswerResult {
   source_reference?: string | null;
   points?: number;
   xp_awarded: number;
+  xp_breakdown?: {
+    accuracy_mult?: number;
+    accuracy_tier?: string;
+    combo_bonus?: number;
+    building_multiplier?: number;
+  };
   total_xp: number;
   resources_awarded?: Partial<Resources>;
   enemy_damage?: number;
+  damage?: number;
+  base_damage?: number;
+  accuracy_tier?: string | null;
+  accuracy_mult?: number | null;
+  combo_mult?: number | null;
+  crit?: boolean;
+  crit_chance?: number | null;
+  enemy_def?: number | null;
+  player_stats?: PlayerStats;
+  chapter_index?: number;
+  is_boss?: boolean;
   game_state?: GameState;
   skills?: SkillInfo[];
   defeated?: boolean;
@@ -609,6 +909,7 @@ export interface AnswerSubmitPayload {
   answer_index?: number;
   matching?: Record<string, string>;
   ordering?: number[];
+  response_ms?: number;
 }
 
 export async function submitAnswer(
@@ -629,6 +930,9 @@ export interface CheckpointResult {
   total_xp: number;
   level: LevelData;
   badges_earned: { name: string; description: string }[];
+  item_reward?: { key: string; name: string; icon: string; type: string } | null;
+  inventory?: InventoryPayload;
+  player_stats?: PlayerStats;
   completed_chapters: number[];
   progress_percent: number;
   chapter_rewards?: Partial<Resources>;
@@ -663,8 +967,88 @@ export async function finishSession(sessionId: number): Promise<GameResult> {
   return request<GameResult>(`/api/sessions/${sessionId}/finish`, { method: "POST" });
 }
 
-export async function getMyProgress() {
-  return request<{ total_xp: number; sessions: unknown[] }>("/api/users/me/progress");
+export interface ProgressSession {
+  session_id: number;
+  course_id: number;
+  course_title: string | null;
+  status: string;
+  xp: number;
+  chapters_completed: number;
+  questions_answered: number;
+  questions_correct: number;
+  last_played: string | null;
+}
+
+export interface EarnedBadge {
+  name: string;
+  description: string;
+  course_id: number;
+  course_title: string;
+  earned_at: string | null;
+}
+
+export interface MyProgress {
+  total_xp: number;
+  total_answers: number;
+  total_correct: number;
+  accuracy_percent: number;
+  courses_played: number;
+  current_streak: number;
+  longest_streak: number;
+  badges: EarnedBadge[];
+  quota: {
+    plan: string;
+    plan_label: string;
+    quota_used: number;
+    quota_limit: number;
+    quota_remaining: number;
+  };
+  sessions: ProgressSession[];
+}
+
+export async function getMyProgress(): Promise<MyProgress> {
+  return request<MyProgress>("/api/users/me/progress");
+}
+
+// ------------------------------------------------------------------------------
+// Inventory / Equipment
+// ------------------------------------------------------------------------------
+
+export async function getInventory(sessionId: number): Promise<InventoryPayload> {
+  return request<InventoryPayload>(`/api/sessions/${sessionId}/inventory`);
+}
+
+export async function equipItem(sessionId: number, itemKey: string) {
+  return request<{ message: string; inventory: InventoryPayload; player_stats: PlayerStats; game_state: GameState }>(
+    `/api/sessions/${sessionId}/inventory/equip`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ item_key: itemKey }),
+    }
+  );
+}
+
+export async function unequipItem(sessionId: number, itemKey: string) {
+  return request<{ message: string; inventory: InventoryPayload; player_stats: PlayerStats; game_state: GameState }>(
+    `/api/sessions/${sessionId}/inventory/unequip`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ item_key: itemKey }),
+    }
+  );
+}
+
+export async function buyItem(sessionId: number, itemKey: string) {
+  return request<{ message: string; inventory: InventoryPayload; player_stats: PlayerStats; game_state: GameState }>(
+    `/api/sessions/${sessionId}/inventory/buy`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ item_key: itemKey }),
+    }
+  );
 }
 
 // ---- Base Economy v2 ----

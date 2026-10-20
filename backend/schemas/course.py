@@ -15,6 +15,10 @@ class CourseUpdate(BaseModel):
     description: Optional[str] = None
     subject: Optional[str] = None
     difficulty: Optional[str] = None
+    game_modes: Optional[list[str]] = None
+    visual_style: Optional[str] = None
+    game_length: Optional[str] = None
+    question_types: Optional[list[str]] = None
     status: Optional[CourseStatus] = None
 
 

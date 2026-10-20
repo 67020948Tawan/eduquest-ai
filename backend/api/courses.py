@@ -8,8 +8,11 @@ import json
 import shutil
 import secrets
 
+from typing import Any, Optional
+
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
+from sqlalchemy import delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
@@ -24,8 +27,11 @@ from models.quiz_question import QuizQuestion
 from models.level import Level
 from models.badge import Badge
 from models.game_session import GameSession
+from models.xp_transaction import XpTransaction
+from models.inventory_item import InventoryItem
 from schemas.course import CourseResponse, CourseUpdate
 from core.deps import get_current_user
+from services.quota import enforce_quota
 from services.extractors import ALLOWED_EXTENSIONS
 from services.art_catalog import resolve_asset, extract_keywords
 from services.game_director import (
@@ -159,6 +165,18 @@ async def update_course(
     for field in ("title", "description", "subject", "difficulty"):
         if updates.get(field) is not None:
             setattr(course, field, updates[field])
+    if updates.get("game_modes") is not None:
+        modes = [m for m in updates["game_modes"] if isinstance(m, str)]
+        if modes:
+            course.game_modes = modes
+    if updates.get("question_types") is not None:
+        qtypes = [q for q in updates["question_types"] if isinstance(q, str)]
+        if qtypes:
+            course.question_types = qtypes
+    if updates.get("visual_style") in ("pixel_art", "modern_2d", "fantasy", "scifi"):
+        course.visual_style = updates["visual_style"]
+    if updates.get("game_length") in ("short", "medium", "long"):
+        course.game_length = updates["game_length"]
 
     await db.commit()
     await db.refresh(course)
@@ -196,6 +214,10 @@ async def delete_course(
                 os.remove(doc.file_path)
             except OSError:
                 pass
+
+    # XP ledger / inventory อ้าง FK ตรงมาที่คอร์ส (ไม่มี cascade) — ต้องลบก่อน
+    await db.execute(delete(XpTransaction).where(XpTransaction.course_id == course_id))
+    await db.execute(delete(InventoryItem).where(InventoryItem.course_id == course_id))
 
     await db.delete(course)
     await db.commit()
@@ -245,6 +267,424 @@ async def upload_document(
 
 
 # ------------------------------------------------------------------------------
+# Content Editor — ครูแก้ไข/เพิ่ม/ลบ/จัดลำดับเนื้อหาก่อนเผยแพร่ (ข้อ 4.2)
+# ------------------------------------------------------------------------------
+
+class ChapterCreate(BaseModel):
+    title: str
+
+
+class ChapterUpdate(BaseModel):
+    title: Optional[str] = None
+    lesson_title: Optional[str] = None
+    lesson_objective: Optional[str] = None
+    lesson_content: Optional[str] = None
+
+
+class ChapterReorder(BaseModel):
+    chapter_ids: list[int]
+
+
+class QuestionPayload(BaseModel):
+    question: str
+    options: list[str] = []
+    correct_answer_index: int = 0
+    explanation: str = ""
+    difficulty: str = "easy"
+    points: int = 50
+    source_reference: Optional[str] = None
+    question_type: str = "multiple_choice"
+    matching_pairs: Optional[list[dict[str, Any]]] = None
+    ordering_items: Optional[list[str]] = None
+    correct_data: Optional[Any] = None
+
+
+VALID_QUESTION_TYPES = {"multiple_choice", "true_false", "matching", "ordering"}
+
+
+def _normalize_question(payload: QuestionPayload) -> dict:
+    """ตรวจ + ปรับข้อมูลคำถามให้อยู่ในรูปแบบที่เกมเล่นได้จริง"""
+    qtype = payload.question_type if payload.question_type in VALID_QUESTION_TYPES else "multiple_choice"
+    options = [str(o).strip() for o in payload.options if str(o).strip()]
+    difficulty = payload.difficulty if payload.difficulty in ("easy", "medium", "hard") else "easy"
+    points = max(1, min(int(payload.points or 50), 1000))
+
+    matching_pairs = None
+    ordering_items = None
+    correct_data = None
+    correct_index = 0
+
+    if qtype in ("multiple_choice", "true_false"):
+        if len(options) < 2:
+            raise HTTPException(status_code=400, detail="ต้องมีตัวเลือกอย่างน้อย 2 ข้อ")
+        if qtype == "true_false" and len(options) != 2:
+            raise HTTPException(status_code=400, detail="คำถามจริง/เท็จต้องมี 2 ตัวเลือก")
+        if not (0 <= payload.correct_answer_index < len(options)):
+            raise HTTPException(status_code=400, detail="คำตอบที่ถูกต้องต้องชี้ไปที่ตัวเลือกที่มีอยู่")
+        correct_index = payload.correct_answer_index
+    elif qtype == "matching":
+        raw_pairs = payload.matching_pairs or []
+        pairs = []
+        for pair in raw_pairs:
+            left = str(pair.get("left", "")).strip()
+            right = str(pair.get("right", "")).strip()
+            if left and right:
+                pairs.append({"left": left, "right": right})
+        if len(pairs) < 2:
+            raise HTTPException(status_code=400, detail="คำถามจับคู่ต้องมีอย่างน้อย 2 คู่")
+        matching_pairs = pairs
+        correct_data = {p["left"]: p["right"] for p in pairs}
+        options = [p["left"] for p in pairs]
+    elif qtype == "ordering":
+        items = [str(i).strip() for i in (payload.ordering_items or []) if str(i).strip()]
+        if len(items) < 2:
+            raise HTTPException(status_code=400, detail="คำถามเรียงลำดับต้องมีอย่างน้อย 2 รายการ")
+        ordering_items = items
+        correct_data = list(range(len(items)))
+        options = items
+
+    return {
+        "question": payload.question.strip(),
+        "options": options,
+        "correct_answer_index": correct_index,
+        "explanation": (payload.explanation or "").strip(),
+        "difficulty": difficulty,
+        "points": points,
+        "source_reference": (payload.source_reference or "").strip() or None,
+        "question_type": qtype,
+        "matching_pairs": matching_pairs,
+        "ordering_items": ordering_items,
+        "correct_data": correct_data,
+    }
+
+
+def _serialize_question(q: QuizQuestion) -> dict:
+    return {
+        "id": q.id,
+        "question": q.question,
+        "options": q.options,
+        "correct_answer_index": q.correct_answer_index,
+        "explanation": q.explanation,
+        "difficulty": q.difficulty,
+        "points": q.points,
+        "source_reference": q.source_reference,
+        "question_type": q.question_type,
+        "matching_pairs": q.matching_pairs,
+        "ordering_items": q.ordering_items,
+        "correct_data": q.correct_data,
+    }
+
+
+def _mark_edited(course: Course) -> bool:
+    """แก้ไขเนื้อหาขณะ Published → กลับเป็น Ready (ต้องกด Publish ยืนยันใหม่)"""
+    if course.status == CourseStatus.PUBLISHED:
+        course.status = CourseStatus.READY
+        return True
+    return False
+
+
+async def _get_owned_chapter(
+    course_id: int,
+    chapter_id: int,
+    current_user: User,
+    db: AsyncSession,
+) -> tuple[Course, Chapter]:
+    course = await get_owned_course(course_id, current_user, db)
+    result = await db.execute(
+        select(Chapter)
+        .options(selectinload(Chapter.lesson), selectinload(Chapter.quiz_questions))
+        .where(Chapter.id == chapter_id, Chapter.course_id == course_id)
+    )
+    chapter = result.scalars().first()
+    if not chapter:
+        raise HTTPException(status_code=404, detail="ไม่พบ Chapter ในคอร์สนี้")
+    return course, chapter
+
+
+@router.get("/courses/{course_id}/edit-data")
+async def get_course_edit_data(
+    course_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """ข้อมูลสำหรับหน้าตัวแก้ไข — ครูเห็นเฉลยได้ (ไม่ส่งให้ฝั่งนักเรียน)"""
+    course = await get_owned_course(course_id, current_user, db)
+    result = await db.execute(
+        select(Chapter)
+        .options(selectinload(Chapter.lesson), selectinload(Chapter.quiz_questions))
+        .where(Chapter.course_id == course_id)
+        .order_by(Chapter.order_index)
+    )
+    chapters = list(result.scalars().all())
+
+    return {
+        "course_id": course.id,
+        "course_title": course.title,
+        "course_description": course.description,
+        "status": course.status.value if hasattr(course.status, "value") else str(course.status),
+        "game_modes": course.game_modes or [],
+        "visual_style": course.visual_style or "pixel_art",
+        "chapters": [
+            {
+                "chapter_id": ch.id,
+                "title": ch.title,
+                "order_index": ch.order_index,
+                "lesson": {
+                    "title": ch.lesson.title if ch.lesson else "",
+                    "objective": ch.lesson.objective if ch.lesson else "",
+                    "content": ch.lesson.content if ch.lesson else "",
+                },
+                "quiz_questions": [
+                    _serialize_question(q)
+                    for q in sorted(ch.quiz_questions, key=lambda x: x.id)
+                ],
+            }
+            for ch in chapters
+        ],
+    }
+
+
+@router.post("/courses/{course_id}/chapters")
+async def create_chapter(
+    course_id: int,
+    payload: ChapterCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    course = await get_owned_course(course_id, current_user, db)
+    title = payload.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="กรุณากรอกชื่อ Chapter")
+
+    max_order = (await db.execute(
+        select(func.max(Chapter.order_index)).where(Chapter.course_id == course_id)
+    )).scalar()
+    chapter = Chapter(
+        course_id=course_id,
+        title=title,
+        order_index=0 if max_order is None else int(max_order) + 1,
+    )
+    db.add(chapter)
+    await db.flush()
+    db.add(Lesson(
+        chapter_id=chapter.id,
+        title=title,
+        objective="",
+        content="",
+    ))
+    republish = _mark_edited(course)
+    await db.commit()
+    await db.refresh(chapter)
+    return {
+        "message": "เพิ่ม Chapter สำเร็จ",
+        "chapter_id": chapter.id,
+        "republish_required": republish,
+    }
+
+
+@router.patch("/courses/{course_id}/chapters/{chapter_id}")
+async def update_chapter(
+    course_id: int,
+    chapter_id: int,
+    payload: ChapterUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    course, chapter = await _get_owned_chapter(course_id, chapter_id, current_user, db)
+    updates = payload.model_dump(exclude_unset=True)
+
+    if updates.get("title") is not None:
+        title = updates["title"].strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="ชื่อ Chapter ห้ามว่าง")
+        chapter.title = title
+
+    if any(k in updates for k in ("lesson_title", "lesson_objective", "lesson_content")):
+        if not chapter.lesson:
+            chapter.lesson = Lesson(
+                chapter_id=chapter.id,
+                title=chapter.title,
+                objective="",
+                content="",
+            )
+        if updates.get("lesson_title") is not None:
+            chapter.lesson.title = updates["lesson_title"]
+        if updates.get("lesson_objective") is not None:
+            chapter.lesson.objective = updates["lesson_objective"]
+        if updates.get("lesson_content") is not None:
+            chapter.lesson.content = updates["lesson_content"]
+
+    republish = _mark_edited(course)
+    await db.commit()
+    return {"message": "บันทึก Chapter แล้ว", "republish_required": republish}
+
+
+@router.delete("/courses/{course_id}/chapters/{chapter_id}")
+async def delete_chapter(
+    course_id: int,
+    chapter_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    course, chapter = await _get_owned_chapter(course_id, chapter_id, current_user, db)
+
+    total = (await db.execute(
+        select(func.count(Chapter.id)).where(Chapter.course_id == course_id)
+    )).scalar() or 0
+    if total <= 1:
+        raise HTTPException(status_code=400, detail="ต้องเหลืออย่างน้อย 1 Chapter")
+
+    await db.delete(chapter)
+    await db.flush()
+
+    remaining = await db.execute(
+        select(Chapter).where(Chapter.course_id == course_id).order_by(Chapter.order_index)
+    )
+    for index, row in enumerate(remaining.scalars().all()):
+        row.order_index = index
+
+    republish = _mark_edited(course)
+    await db.commit()
+    return {"message": "ลบ Chapter สำเร็จ", "republish_required": republish}
+
+
+@router.post("/courses/{course_id}/chapters/reorder")
+async def reorder_chapters(
+    course_id: int,
+    payload: ChapterReorder,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    course = await get_owned_course(course_id, current_user, db)
+    result = await db.execute(
+        select(Chapter).where(Chapter.course_id == course_id)
+    )
+    chapters = {ch.id: ch for ch in result.scalars().all()}
+
+    if set(payload.chapter_ids) != set(chapters.keys()):
+        raise HTTPException(status_code=400, detail="รายการ Chapter ไม่ครบหรือไม่ถูกต้อง")
+
+    for index, chapter_id in enumerate(payload.chapter_ids):
+        chapters[chapter_id].order_index = index
+
+    republish = _mark_edited(course)
+    await db.commit()
+    return {"message": "จัดลำดับ Chapter แล้ว", "republish_required": republish}
+
+
+@router.post("/courses/{course_id}/chapters/{chapter_id}/questions")
+async def create_question(
+    course_id: int,
+    chapter_id: int,
+    payload: QuestionPayload,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    course, chapter = await _get_owned_chapter(course_id, chapter_id, current_user, db)
+    data = _normalize_question(payload)
+
+    question = QuizQuestion(chapter_id=chapter.id, **data)
+    db.add(question)
+    republish = _mark_edited(course)
+    await db.commit()
+    await db.refresh(question)
+    return {
+        "message": "เพิ่มคำถามสำเร็จ",
+        "question": _serialize_question(question),
+        "republish_required": republish,
+    }
+
+
+@router.patch("/courses/{course_id}/questions/{question_id}")
+async def update_question(
+    course_id: int,
+    question_id: int,
+    payload: QuestionPayload,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    course = await get_owned_course(course_id, current_user, db)
+    result = await db.execute(
+        select(QuizQuestion)
+        .join(Chapter, Chapter.id == QuizQuestion.chapter_id)
+        .where(QuizQuestion.id == question_id, Chapter.course_id == course_id)
+    )
+    question = result.scalars().first()
+    if not question:
+        raise HTTPException(status_code=404, detail="ไม่พบคำถามในคอร์สนี้")
+
+    data = _normalize_question(payload)
+    for field, value in data.items():
+        setattr(question, field, value)
+
+    republish = _mark_edited(course)
+    await db.commit()
+    await db.refresh(question)
+    return {
+        "message": "บันทึกคำถามแล้ว",
+        "question": _serialize_question(question),
+        "republish_required": republish,
+    }
+
+
+@router.delete("/courses/{course_id}/questions/{question_id}")
+async def delete_question(
+    course_id: int,
+    question_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    course = await get_owned_course(course_id, current_user, db)
+    result = await db.execute(
+        select(QuizQuestion)
+        .join(Chapter, Chapter.id == QuizQuestion.chapter_id)
+        .where(QuizQuestion.id == question_id, Chapter.course_id == course_id)
+    )
+    question = result.scalars().first()
+    if not question:
+        raise HTTPException(status_code=404, detail="ไม่พบคำถามในคอร์สนี้")
+
+    total = (await db.execute(
+        select(func.count(QuizQuestion.id)).where(QuizQuestion.chapter_id == question.chapter_id)
+    )).scalar() or 0
+    if total <= 1:
+        raise HTTPException(status_code=400, detail="แต่ละ Chapter ต้องเหลืออย่างน้อย 1 คำถาม")
+
+    await db.delete(question)
+    republish = _mark_edited(course)
+    await db.commit()
+    return {"message": "ลบคำถามแล้ว", "republish_required": republish}
+
+
+@router.post("/courses/{course_id}/archive")
+async def archive_course(
+    course_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """เก็บคอร์สเข้ากรุ — ลิงก์สาธารณะใช้ไม่ได้จนกว่าจะกู้คืน"""
+    course = await get_owned_course(course_id, current_user, db)
+    course.status = CourseStatus.ARCHIVED
+    await db.commit()
+    return {"message": "📦 เก็บคอร์สเข้ากรุแล้ว", "status": "ARCHIVED"}
+
+
+@router.post("/courses/{course_id}/restore")
+async def restore_course(
+    course_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    course = await get_owned_course(course_id, current_user, db)
+    course.status = CourseStatus.READY if course.game_config else CourseStatus.DRAFT
+    await db.commit()
+    return {
+        "message": "♻️ กู้คืนคอร์สแล้ว",
+        "status": course.status.value if hasattr(course.status, "value") else str(course.status),
+    }
+
+
+# ------------------------------------------------------------------------------
 # AI Analysis / Recommendation / Generation
 # ------------------------------------------------------------------------------
 
@@ -257,6 +697,9 @@ async def analyze_course_content(
     await get_owned_course(course_id, current_user, db)
     document = await get_latest_document(course_id, db)
 
+    quota = await enforce_quota(current_user, db)
+    await db.commit()
+
     ai_result = await analyze_content(document.file_path)
     if "error" in ai_result:
         raise HTTPException(status_code=500, detail=ai_result["error"])
@@ -264,6 +707,7 @@ async def analyze_course_content(
     return {
         "message": "AI วิเคราะห์เนื้อหาสำเร็จ",
         "filename": document.filename,
+        "quota": quota,
         "ai_analysis": ai_result,
     }
 
@@ -285,6 +729,9 @@ async def analyze_content_sufficiency_endpoint(
     if game_length not in valid_lengths:
         game_length = "medium"
 
+    quota = await enforce_quota(current_user, db)
+    await db.commit()
+
     ai_result = await analyze_content_sufficiency(document.file_path, game_length=game_length)
     if "error" in ai_result:
         raise HTTPException(status_code=500, detail=ai_result["error"])
@@ -293,6 +740,7 @@ async def analyze_content_sufficiency_endpoint(
         "message": "AI ตรวจสอบความเพียงพอของเนื้อหาสำเร็จ",
         "filename": document.filename,
         "game_length": game_length,
+        "quota": quota,
         "sufficiency": ai_result,
     }
 
@@ -305,6 +753,9 @@ async def recommend_genres(
 ):
     await get_owned_course(course_id, current_user, db)
     document = await get_latest_document(course_id, db)
+
+    await enforce_quota(current_user, db)
+    await db.commit()
 
     ai_result = await recommend_game_genres(document.file_path)
     if "error" in ai_result:
@@ -324,6 +775,9 @@ async def generate_course(
 ):
     course = await get_owned_course(course_id, current_user, db)
     document = await get_latest_document(course_id, db)
+
+    await enforce_quota(current_user, db)
+    await db.commit()
 
     if visual_style:
         course.visual_style = visual_style
