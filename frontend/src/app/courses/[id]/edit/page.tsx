@@ -185,6 +185,16 @@ export default function CourseEditorPage() {
         JSON.stringify([...courseModes].sort()) !== JSON.stringify([...data.game_modes].sort()))
   );
   const statusStyle = data ? STATUS_STYLE[data.status] ?? STATUS_STYLE.DRAFT : STATUS_STYLE.DRAFT;
+  const readinessChecks = [
+    { label: "ตั้งชื่อคอร์สแล้ว", done: Boolean(courseTitle.trim()) },
+    { label: "มีคำอธิบายคอร์ส", done: Boolean(courseDescription.trim()) },
+    { label: "เลือกหมวดเกมแล้ว", done: courseModes.length > 0 },
+    { label: "มี Chapter อย่างน้อย 1 บท", done: (data?.chapters.length ?? 0) > 0 },
+    { label: "มีคำถามอย่างน้อย 1 ข้อ", done: totalQuestions > 0 },
+  ];
+  const readiness = Math.round(
+    (readinessChecks.filter((check) => check.done).length / readinessChecks.length) * 100
+  );
 
   return (
     <div className="relative flex min-h-screen flex-col overflow-x-hidden bg-slate-950 text-slate-100">
@@ -203,46 +213,94 @@ export default function CourseEditorPage() {
         </div>
       )}
 
-      <main className="relative mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6 sm:py-10">
-        <div className="mb-8">
+      <main className="relative mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6 sm:py-10">
+        <div className="mb-4 flex items-center justify-between gap-3">
           <Link
             href="/dashboard"
-            className="inline-flex items-center gap-1.5 text-sm text-indigo-400 transition hover:text-indigo-300"
+            className="inline-flex items-center gap-2 rounded-full border border-slate-800 bg-slate-900/60 px-3 py-1.5 text-xs font-medium text-slate-400 transition hover:border-indigo-500/40 hover:text-indigo-300"
           >
-            ← Dashboard
+            <span aria-hidden="true">←</span> กลับ Dashboard
           </Link>
-          <div className="mt-3 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-            <div className="flex items-start gap-3">
-              <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl border border-indigo-500/30 bg-indigo-500/10 text-2xl">
+          <span className="hidden text-[11px] font-medium uppercase tracking-[0.18em] text-slate-600 sm:block">
+            Course editor · #{courseId}
+          </span>
+        </div>
+
+        <section className="relative mb-6 overflow-hidden rounded-3xl border border-indigo-500/20 bg-gradient-to-br from-indigo-950/70 via-slate-900 to-slate-950 p-5 shadow-2xl shadow-indigo-950/20 sm:p-7">
+          <div className="pointer-events-none absolute -right-20 -top-24 h-72 w-72 rounded-full bg-indigo-500/15 blur-3xl" />
+          <div className="pointer-events-none absolute -bottom-24 left-1/3 h-56 w-56 rounded-full bg-fuchsia-500/10 blur-3xl" />
+
+          <div className="relative flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+            <div className="flex min-w-0 items-start gap-4">
+              <span className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl border border-white/10 bg-gradient-to-br from-indigo-500 to-fuchsia-600 text-2xl shadow-lg shadow-indigo-950/40">
                 ✏️
               </span>
               <div className="min-w-0">
-                <h1 className="text-2xl font-bold text-white sm:text-3xl">แก้ไขเนื้อหา</h1>
-                <p className="mt-1 truncate text-sm text-slate-400">
+                <p className="text-[11px] font-bold uppercase tracking-[0.22em] text-indigo-300/80">
+                  Course workspace
+                </p>
+                <h1 className="mt-1 text-2xl font-black tracking-tight text-white sm:text-3xl">
+                  แก้ไขเนื้อหา
+                </h1>
+                <p className="mt-1 max-w-2xl truncate text-sm text-slate-300">
                   {courseTitle || "คอร์สของคุณ"}
                 </p>
                 {data && (
-                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-                    <span className={`rounded-full border px-2.5 py-1 font-semibold ${statusStyle}`}>
+                  <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+                    <span className={`rounded-full border px-2.5 py-1 font-bold ${statusStyle}`}>
                       {data.status}
                     </span>
+                    <span className="rounded-full border border-slate-700/80 bg-slate-900/60 px-2.5 py-1 text-slate-400">
+                      {courseDirty ? "● มีการแก้ไขที่ยังไม่บันทึก" : "✓ ข้อมูลล่าสุดบันทึกแล้ว"}
+                    </span>
                     {data.status === "PUBLISHED" && (
-                      <span className="text-amber-400/80">
-                        การแก้ไขจะเปลี่ยนเป็น Ready และต้อง Publish ใหม่
+                      <span className="rounded-full border border-amber-500/20 bg-amber-950/30 px-2.5 py-1 text-amber-300/90">
+                        แก้ไขแล้วต้อง Publish ใหม่
                       </span>
                     )}
                   </div>
                 )}
               </div>
             </div>
-            <Link
-              href={`/courses/${courseId}/preview`}
-              className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-700 bg-slate-900/70 px-4 py-2.5 text-sm font-medium text-slate-300 transition hover:border-indigo-500/50 hover:text-white"
-            >
-              ▶ ดูตัวอย่างเกม
-            </Link>
+
+            <div className="flex shrink-0 flex-col gap-2 sm:flex-row xl:flex-col">
+              <Link
+                href={`/courses/${courseId}/preview`}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-semibold text-white backdrop-blur transition hover:border-indigo-400/40 hover:bg-white/10"
+              >
+                <span aria-hidden="true">▶</span> ดูตัวอย่างเกม
+              </Link>
+              {courseDirty && (
+                <button
+                  onClick={handleSaveCourse}
+                  disabled={savingCourse || !courseTitle.trim()}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-500 px-4 py-2.5 text-sm font-bold text-white shadow-lg shadow-indigo-950/40 transition hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {savingCourse ? "กำลังบันทึก..." : "บันทึกการเปลี่ยนแปลง"}
+                </button>
+              )}
+            </div>
           </div>
-        </div>
+
+          <div className="relative mt-6 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+            {[
+              { icon: "📚", label: "Chapter", value: data?.chapters.length ?? 0 },
+              { icon: "❓", label: "คำถาม", value: totalQuestions },
+              { icon: "🎮", label: "โหมดเกม", value: courseModes.length },
+              { icon: "✅", label: "ความพร้อม", value: `${readiness}%` },
+            ].map((stat) => (
+              <div
+                key={stat.label}
+                className="rounded-2xl border border-white/10 bg-slate-950/40 px-3.5 py-3 backdrop-blur"
+              >
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  {stat.icon} {stat.label}
+                </p>
+                <p className="mt-1 text-xl font-black text-white">{stat.value}</p>
+              </div>
+            ))}
+          </div>
+        </section>
 
         {error ? (
           <div className="rounded-2xl border border-rose-900/50 bg-rose-950/30 p-6 text-rose-300">
@@ -255,66 +313,124 @@ export default function CourseEditorPage() {
           </div>
         ) : (
           <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_300px] lg:items-start">
-            <aside className="order-first space-y-4 lg:order-2 lg:sticky lg:top-24">
-              <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5 shadow-xl shadow-slate-950/20">
-                <div className="flex items-center justify-between gap-2">
-                  <h2 className="text-sm font-bold text-white">ภาพรวมคอร์ส</h2>
-                  <span className={`rounded-full border px-2.5 py-1 text-[11px] font-bold ${statusStyle}`}>
-                    {data.status}
-                  </span>
-                </div>
-                <div className="mt-4 grid grid-cols-3 gap-2 text-center">
-                  <div className="rounded-xl border border-slate-800 bg-slate-950/70 px-2 py-3">
-                    <p className="text-xl font-bold text-white">{data.chapters.length}</p>
-                    <p className="mt-0.5 text-[10px] uppercase tracking-wider text-slate-500">Chapter</p>
+            <aside className="order-last space-y-4 lg:order-2 lg:sticky lg:top-24">
+              <div className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/60 shadow-xl shadow-slate-950/20">
+                <div className="border-b border-slate-800 bg-slate-900/70 px-5 py-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <h2 className="text-sm font-bold text-white">ความพร้อมของคอร์ส</h2>
+                    <span
+                      className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${
+                        readiness === 100
+                          ? "bg-emerald-500/15 text-emerald-300"
+                          : "bg-indigo-500/15 text-indigo-300"
+                      }`}
+                    >
+                      {readiness}%
+                    </span>
                   </div>
-                  <div className="rounded-xl border border-slate-800 bg-slate-950/70 px-2 py-3">
-                    <p className="text-xl font-bold text-white">{totalQuestions}</p>
-                    <p className="mt-0.5 text-[10px] uppercase tracking-wider text-slate-500">คำถาม</p>
-                  </div>
-                  <div className="rounded-xl border border-slate-800 bg-slate-950/70 px-2 py-3">
-                    <p className="text-xl font-bold text-white">{courseModes.length}</p>
-                    <p className="mt-0.5 text-[10px] uppercase tracking-wider text-slate-500">โหมด</p>
+                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-950">
+                    <div
+                      className={`h-full rounded-full transition-all duration-500 ${
+                        readiness === 100
+                          ? "bg-gradient-to-r from-emerald-500 to-teal-400"
+                          : "bg-gradient-to-r from-indigo-500 to-fuchsia-500"
+                      }`}
+                      style={{ width: `${readiness}%` }}
+                    />
                   </div>
                 </div>
-
-                <div className="mt-5">
-                  <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                    โหมดเกมที่เลือก
-                  </p>
-                  {selectedModes.length > 0 ? (
-                    <ul className="mt-2 space-y-1.5">
-                      {selectedModes.map((mode) => (
-                        <li key={mode.id} className="flex items-center gap-2 text-xs text-slate-300">
-                          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" />
-                          <span className="truncate">{mode.title}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="mt-2 rounded-lg border border-amber-500/20 bg-amber-950/20 px-3 py-2 text-xs text-amber-300">
-                      ยังไม่ได้เลือกโหมดเกม
-                    </p>
-                  )}
-                </div>
+                <ul className="space-y-2.5 px-5 py-4">
+                  {readinessChecks.map((check) => (
+                    <li key={check.label} className="flex items-center gap-2.5 text-xs">
+                      <span
+                        className={`grid h-5 w-5 shrink-0 place-items-center rounded-full border text-[10px] font-bold ${
+                          check.done
+                            ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-300"
+                            : "border-slate-700 bg-slate-950 text-slate-600"
+                        }`}
+                      >
+                        {check.done ? "✓" : "·"}
+                      </span>
+                      <span className={check.done ? "text-slate-300" : "text-slate-500"}>
+                        {check.label}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="border-t border-slate-800 px-5 py-3 text-[11px] leading-relaxed text-slate-500">
+                  {readiness === 100
+                    ? "ครบทุกขั้นตอนแล้ว พร้อมเปิดให้นักเรียนเล่น"
+                    : "ทำรายการที่ยังว่างเพื่อให้คอร์สพร้อมใช้งาน"}
+                </p>
               </div>
 
               <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-5">
-                <p className="text-sm font-bold text-slate-200">💡 เคล็ดลับ</p>
-                <ul className="mt-3 space-y-2 text-xs leading-relaxed text-slate-400">
-                  <li>• กดชื่อ Chapter เพื่อเปิด/ปิดการแก้ไข</li>
-                  <li>• ใช้ปุ่ม ↑ ↓ เพื่อสลับลำดับบท</li>
-                  <li>• บันทึก Chapter ก่อนเพิ่มหรือแก้คำถาม</li>
-                </ul>
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-sm font-bold text-slate-200">โหมดเกมที่เลือก</p>
+                  <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] font-bold text-slate-400">
+                    {courseModes.length}
+                  </span>
+                </div>
+                {selectedModes.length > 0 ? (
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    {selectedModes.map((mode) => (
+                      <span
+                        key={mode.id}
+                        className="rounded-lg border border-emerald-500/20 bg-emerald-950/30 px-2.5 py-1 text-[11px] font-medium text-emerald-200"
+                      >
+                        {mode.title}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-3 rounded-xl border border-amber-500/20 bg-amber-950/20 px-3 py-2.5 text-xs text-amber-300">
+                    ยังไม่ได้เลือกโหมดเกม
+                  </p>
+                )}
+              </div>
+
+              <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-5">
+                <p className="text-sm font-bold text-slate-200">🚀 ทางลัด</p>
+                <div className="mt-3 space-y-1.5">
+                  <a
+                    href="#add-chapter"
+                    className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2 text-xs text-slate-300 transition hover:border-emerald-500/30 hover:text-emerald-300"
+                  >
+                    <span>+ เพิ่ม Chapter ใหม่</span>
+                    <span aria-hidden="true">↓</span>
+                  </a>
+                  <Link
+                    href={`/courses/${courseId}/preview`}
+                    className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2 text-xs text-slate-300 transition hover:border-indigo-500/30 hover:text-indigo-300"
+                  >
+                    <span>▶ ทดลองเล่นเกม</span>
+                    <span aria-hidden="true">→</span>
+                  </Link>
+                  <Link
+                    href="/dashboard"
+                    className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2 text-xs text-slate-300 transition hover:border-slate-600 hover:text-white"
+                  >
+                    <span>← กลับ Dashboard</span>
+                    <span aria-hidden="true">→</span>
+                  </Link>
+                </div>
+                <p className="mt-4 border-t border-slate-800 pt-3 text-[11px] leading-relaxed text-slate-500">
+                  กดชื่อ Chapter เพื่อเปิด/ปิดการแก้ไข · ใช้ ↑ ↓ เพื่อสลับลำดับ
+                </p>
               </div>
             </aside>
 
-            <div className="order-last min-w-0 space-y-6 lg:order-1">
+            <div className="order-first min-w-0 space-y-6 lg:order-1">
               <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/50 shadow-xl shadow-slate-950/20">
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 bg-slate-900/70 px-5 py-4 sm:px-6">
-                  <div>
-                    <h2 className="font-bold text-white">ข้อมูลคอร์ส</h2>
-                    <p className="mt-0.5 text-xs text-slate-500">ชื่อ คำอธิบาย และรูปแบบการเล่น</p>
+                  <div className="flex items-center gap-3">
+                    <span className="grid h-8 w-8 place-items-center rounded-xl border border-indigo-500/30 bg-indigo-500/10 text-xs font-black text-indigo-300">
+                      1
+                    </span>
+                    <div>
+                      <h2 className="font-bold text-white">ข้อมูลคอร์ส</h2>
+                      <p className="mt-0.5 text-xs text-slate-500">ชื่อ คำอธิบาย และรูปแบบการเล่น</p>
+                    </div>
                   </div>
                   <span
                     className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${
@@ -379,24 +495,31 @@ export default function CourseEditorPage() {
                                   : [...prev, mode.id]
                               )
                             }
-                            className={`group relative flex items-start gap-3 rounded-xl border p-3.5 text-left transition-all ${
+                            className={`group relative flex items-start gap-3 rounded-xl border p-3.5 text-left transition-all duration-200 ${
                               on
-                                ? "border-emerald-500/60 bg-emerald-950/25 shadow-inner shadow-emerald-950/30"
-                                : "border-slate-700 bg-slate-950 hover:border-slate-500"
+                                ? "border-emerald-400/50 bg-gradient-to-br from-emerald-950/60 to-slate-950 shadow-lg shadow-emerald-950/20 ring-1 ring-emerald-400/20"
+                                : "border-slate-700/80 bg-slate-950/60 hover:-translate-y-0.5 hover:border-indigo-400/40 hover:bg-slate-900"
                             }`}
                           >
                             <span
-                              className={`mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-md border text-[11px] font-bold ${
+                              className={`mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-md border text-[11px] font-bold transition ${
                                 on
                                   ? "border-emerald-400 bg-emerald-500 text-slate-950"
-                                  : "border-slate-600 text-transparent"
+                                  : "border-slate-600 text-transparent group-hover:border-indigo-400"
                               }`}
                             >
                               ✓
                             </span>
-                            <span className="min-w-0">
-                              <span className={`block text-sm font-bold ${on ? "text-emerald-100" : "text-slate-200"}`}>
-                                {mode.title}
+                            <span className="min-w-0 flex-1">
+                              <span className="flex items-center justify-between gap-2">
+                                <span className={`block text-sm font-bold ${on ? "text-emerald-100" : "text-slate-200"}`}>
+                                  {mode.title}
+                                </span>
+                                {on && (
+                                  <span className="shrink-0 rounded-full bg-emerald-400/10 px-2 py-0.5 text-[10px] font-bold text-emerald-300">
+                                    เลือกแล้ว
+                                  </span>
+                                )}
                               </span>
                               <span className="mt-0.5 block text-xs text-slate-500">{mode.desc}</span>
                             </span>
@@ -406,33 +529,51 @@ export default function CourseEditorPage() {
                     </div>
                   </div>
 
-                  <div className="flex flex-col gap-3 border-t border-slate-800 pt-5 sm:flex-row sm:items-center sm:justify-between">
-                    <p className="text-xs text-slate-500">
-                      การแก้ไขจะมีผลกับการเล่นครั้งถัดไป
-                    </p>
+                  <div className="flex flex-col gap-3 rounded-2xl border border-slate-800 bg-slate-950/50 p-3.5 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="text-xs font-medium text-slate-300">
+                        การแก้ไขจะมีผลกับการเล่นครั้งถัดไป
+                      </p>
+                      <p className="mt-0.5 text-[11px] text-slate-500">
+                        ตรวจสอบชื่อ คำอธิบาย และหมวดเกมก่อนบันทึก
+                      </p>
+                    </div>
                     <button
                       onClick={handleSaveCourse}
                       disabled={savingCourse || !courseTitle.trim() || !courseDirty}
-                      className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-5 py-2.5 text-sm font-bold text-white shadow-lg shadow-indigo-950/40 transition hover:from-indigo-500 hover:to-violet-500 disabled:cursor-not-allowed disabled:from-slate-700 disabled:to-slate-700 disabled:opacity-60"
                     >
-                      {savingCourse ? "กำลังบันทึก..." : courseDirty ? "บันทึกการเปลี่ยนแปลง" : "บันทึกแล้ว"}
+                      {savingCourse ? "กำลังบันทึก..." : courseDirty ? "บันทึกการเปลี่ยนแปลง" : "✓ บันทึกแล้ว"}
                     </button>
                   </div>
                 </div>
               </section>
 
-              <section className="space-y-4">
-                <div className="flex flex-wrap items-end justify-between gap-2">
-                  <div>
-                    <h2 className="text-lg font-bold text-white">เนื้อหาและคำถาม</h2>
-                    <p className="mt-0.5 text-xs text-slate-500">
-                      {data.chapters.length} Chapter · {totalQuestions} คำถาม
-                    </p>
+              <section id="add-chapter" className="scroll-mt-24 space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-3">
+                    <span className="grid h-8 w-8 place-items-center rounded-xl border border-fuchsia-500/30 bg-fuchsia-500/10 text-xs font-black text-fuchsia-300">
+                      2
+                    </span>
+                    <div>
+                      <h2 className="text-lg font-bold text-white">เนื้อหาและคำถาม</h2>
+                      <p className="mt-0.5 text-xs text-slate-500">
+                        {data.chapters.length} Chapter · {totalQuestions} คำถาม
+                      </p>
+                    </div>
                   </div>
                 </div>
 
-                <div className="rounded-2xl border border-dashed border-slate-700 bg-slate-900/30 p-4">
-                  <p className="mb-2.5 text-sm font-semibold text-slate-200">+ เพิ่ม Chapter ใหม่</p>
+                <div className="rounded-2xl border border-dashed border-slate-700 bg-gradient-to-br from-slate-900/70 to-slate-950 p-4">
+                  <div className="mb-3 flex items-center gap-2.5">
+                    <span className="grid h-8 w-8 place-items-center rounded-xl bg-emerald-500/10 text-sm text-emerald-300">
+                      +
+                    </span>
+                    <div>
+                      <p className="text-sm font-bold text-slate-200">เพิ่ม Chapter ใหม่</p>
+                      <p className="text-[11px] text-slate-500">ตั้งชื่อบท ثمค่อยเพิ่มเนื้อหาและคำถาม</p>
+                    </div>
+                  </div>
                   <div className="flex flex-col gap-2 sm:flex-row">
                     <input
                       value={newChapterTitle}
@@ -543,17 +684,19 @@ function ChapterEditor({
 
   return (
     <details
-      className="group overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/50 transition-colors open:border-indigo-500/40 open:bg-slate-900/70"
+      className="group overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/50 transition-all open:border-indigo-500/50 open:bg-slate-900/80 open:shadow-xl open:shadow-indigo-950/20"
       open={index === 0}
     >
-      <summary className="flex list-none cursor-pointer select-none items-center gap-3 p-4 transition hover:bg-slate-900/70 [&::-webkit-details-marker]:hidden">
-        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-indigo-500/20 bg-indigo-500/10 text-xs font-bold text-indigo-300">
+      <summary className="flex list-none cursor-pointer select-none items-center gap-3 p-4 transition hover:bg-slate-900/70 sm:p-5 [&::-webkit-details-marker]:hidden">
+        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-indigo-500/30 bg-gradient-to-br from-indigo-500/20 to-fuchsia-500/10 text-xs font-black text-indigo-300">
           {index + 1}
         </span>
         <span className="min-w-0 flex-1">
           <span className="block truncate font-semibold text-slate-100">{chapter.title}</span>
-          <span className="mt-0.5 flex items-center gap-1.5 text-[11px] text-slate-500">
-            <span>{chapter.quiz_questions.length} คำถาม</span>
+          <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
+            <span className="rounded-full bg-slate-800/80 px-2 py-0.5 text-slate-400">
+              {chapter.quiz_questions.length} คำถาม
+            </span>
             {chapter.lesson.title && (
               <>
                 <span>·</span>
