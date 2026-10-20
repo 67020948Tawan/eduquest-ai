@@ -1353,71 +1353,117 @@ function CoursePlayInner() {
                     </div>
                   )}
 
-                  {qType === "ordering" && (
-                    <div className="space-y-2">
-                      <p className="text-xs font-semibold text-slate-400 mb-2">ลาก/คลิกเพื่อเรียงลำดับให้ถูกต้อง</p>
-                      {(q.ordering_items ?? []).map((item, i) => {
-                          const currentOrder = (selectedVal as number[]) || [];
-                          const pos = currentOrder.indexOf(i);
-                          const cls = `rounded-lg border px-3 py-2 text-sm transition-all ${
-                            pos === -1
-                              ? "border-slate-700 bg-slate-950 text-slate-300 hover:border-indigo-500/60"
-                              : "border-emerald-500 bg-emerald-950/40 text-emerald-200"
-                          }`;
+                  {qType === "ordering" && (() => {
+                    const items = q.ordering_items ?? [];
+                    const stored = Array.isArray(selectedVal) ? (selectedVal as number[]) : [];
+                    const hasOrder = stored.length === items.length;
+                    const currentOrder = hasOrder ? stored : items.map((_, i) => i);
+
+                    const commitOrder = (next: number[]) => {
+                      setSelected((prev) => ({ ...prev, [q.id]: next }));
+                    };
+
+                    const moveItem = (from: number, to: number) => {
+                      if (locked || submittingId === q.id) return;
+                      if (from === to || to < 0 || to >= currentOrder.length) return;
+                      const next = [...currentOrder];
+                      const [moved] = next.splice(from, 1);
+                      next.splice(to, 0, moved);
+                      commitOrder(next);
+                    };
+
+                    return (
+                      <div className="space-y-2">
+                        <p className="text-xs font-semibold text-slate-400 mb-2">
+                          ลากบล็อคขึ้นลงเพื่อเรียงลำดับ หรือใช้ปุ่มลูกศร
+                        </p>
+                        {currentOrder.map((itemIndex, position) => {
+                          const item = items[itemIndex];
+                          if (item === undefined) return null;
                           return (
-                            <div key={`item-${i}`} className={cls}>
-                              <div className="flex items-center justify-between">
-                                <span className="font-medium">{item}</span>
-                                <span className="text-xs text-slate-500">{pos === -1 ? "ยังไม่เรียง" : `อันดับ ${pos + 1}`}</span>
-                              </div>
-                              <div className="flex gap-1 mt-1">
-                                <button
-                                  disabled={locked || submittingId === q.id || pos <= 0}
-                                  onClick={() => {
-                                    if (locked || submittingId === q.id) return;
-                                    const cur = (selectedVal as number[]) || [];
-                                    if (!cur.includes(i)) {
-                                      setSelected((prev) => ({ ...prev, [q.id]: [...cur, i] as number[] }));
-                                    } else {
-                                      const idx = cur.indexOf(i);
-                                      const next = [...cur];
-                                      next.splice(idx, 1);
-                                      next.splice(Math.max(0, idx - 1), 0, i);
-                                      setSelected((prev) => ({ ...prev, [q.id]: next as number[] }));
+                            <div
+                              key={`item-${itemIndex}`}
+                              draggable={!locked && submittingId !== q.id}
+                              onDragStart={(e) => {
+                                if (locked || submittingId === q.id) return;
+                                e.dataTransfer.effectAllowed = "move";
+                                e.dataTransfer.setData(
+                                  "text/plain",
+                                  JSON.stringify({ qid: q.id, index: itemIndex })
+                                );
+                                e.currentTarget.classList.add("opacity-50");
+                              }}
+                              onDragEnd={(e) => e.currentTarget.classList.remove("opacity-50")}
+                              onDragOver={(e) => {
+                                if (!locked && submittingId !== q.id) {
+                                  e.preventDefault();
+                                  e.dataTransfer.dropEffect = "move";
+                                }
+                              }}
+                              onDrop={(e) => {
+                                e.preventDefault();
+                                if (locked || submittingId === q.id) return;
+                                try {
+                                  const payload = JSON.parse(
+                                    e.dataTransfer.getData("text/plain")
+                                  ) as { qid?: number; index?: number };
+                                  if (payload.qid !== q.id || typeof payload.index !== "number") return;
+                                  const from = currentOrder.indexOf(payload.index);
+                                  moveItem(from, position);
+                                } catch {
+                                  /* ignore invalid drag payload */
+                                }
+                              }}
+                              className={`group cursor-grab rounded-lg border px-3 py-2 text-sm transition-all active:cursor-grabbing ${
+                                hasOrder
+                                  ? "border-emerald-500/70 bg-emerald-950/30 text-emerald-100"
+                                  : "border-slate-700 bg-slate-950 text-slate-300 hover:border-indigo-500/60"
+                              }`}
+                            >
+                              <div className="flex items-center gap-3">
+                                <span className="select-none text-lg leading-none text-slate-500 group-hover:text-indigo-400">
+                                  ⠿
+                                </span>
+                                <span className="flex-1 font-medium">{item}</span>
+                                <span className="shrink-0 text-xs text-slate-500">
+                                  {hasOrder ? `อันดับ ${position + 1}` : "ลากเพื่อจัดลำดับ"}
+                                </span>
+                                <div className="flex shrink-0 gap-1">
+                                  <button
+                                    type="button"
+                                    disabled={locked || submittingId === q.id || position === 0}
+                                    onClick={() => moveItem(position, position - 1)}
+                                    className="rounded bg-slate-800 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700 disabled:opacity-40"
+                                    aria-label="เลื่อนขึ้น"
+                                  >
+                                    ↑
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={
+                                      locked ||
+                                      submittingId === q.id ||
+                                      position === currentOrder.length - 1
                                     }
-                                  }}
-                                  className="px-2 py-1 rounded bg-slate-800 text-slate-300 text-xs hover:bg-slate-700 disabled:opacity-50"
-                                >
-                                  ↑
-                                </button>
-                                <button
-                                  disabled={locked || submittingId === q.id || pos === -1 || pos >= (q.ordering_items ?? []).length - 1}
-                                  onClick={() => {
-                                    if (locked || submittingId === q.id) return;
-                                    const cur = (selectedVal as number[]) || [];
-                                    if (!cur.includes(i)) {
-                                      setSelected((prev) => ({ ...prev, [q.id]: [...cur, i] as number[] }));
-                                    } else {
-                                      const idx = cur.indexOf(i);
-                                      const next = [...cur];
-                                      next.splice(idx, 1);
-                                      next.splice(Math.min(next.length, idx + 1), 0, i);
-                                      setSelected((prev) => ({ ...prev, [q.id]: next as number[] }));
-                                    }
-                                  }}
-                                  className="px-2 py-1 rounded bg-slate-800 text-slate-300 text-xs hover:bg-slate-700 disabled:opacity-50"
-                                >
-                                  ↓
-                                </button>
+                                    onClick={() => moveItem(position, position + 1)}
+                                    className="rounded bg-slate-800 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700 disabled:opacity-40"
+                                    aria-label="เลื่อนลง"
+                                  >
+                                    ↓
+                                  </button>
+                                </div>
                               </div>
                             </div>
                           );
                         })}
-                      {typeof selectedVal === "number" && (
-                        <p className="text-xs text-amber-400 mt-2">เลือก項目แล้วกด ↑/↓ เพื่อเรียงลำดับ</p>
-                      )}
-                    </div>
-                  )}
+                        {!hasOrder && (
+                          <p className="mt-2 text-xs text-amber-400">
+                            ลากบล็อคหรือกดลูกศรเพื่อเริ่มจัดลำดับ
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })()}
 
                   {(!qType || qType === "multiple_choice" || qType === "true_false") && (
                     <div className="grid gap-2">
