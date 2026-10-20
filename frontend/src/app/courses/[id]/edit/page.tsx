@@ -126,6 +126,7 @@ export default function CourseEditorPage() {
 
   const load = useCallback(async () => {
     try {
+      setError(null);
       const res = await getCourseEditData(courseId);
       setData(res);
       setCourseTitle(res.course_title);
@@ -362,8 +363,8 @@ export default function CourseEditorPage() {
                 className="rounded-2xl border border-white/10 bg-slate-950/40 px-3.5 py-3 backdrop-blur"
               >
                 <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  <span className={`grid h-5 w-5 shrink-0 place-items-center rounded-md border ${stat.tone}`}>
-                    <StatIcon path={stat.icon} className="h-3 w-3" />
+                  <span className={`grid h-6 w-6 shrink-0 place-items-center rounded-md border ${stat.tone}`}>
+                    <StatIcon path={stat.icon} className="h-3.5 w-3.5" />
                   </span>
                   {stat.label}
                 </p>
@@ -374,8 +375,18 @@ export default function CourseEditorPage() {
         </section>
 
         {error ? (
-          <div className="rounded-2xl border border-rose-900/50 bg-rose-950/30 p-6 text-rose-300">
-            {error}
+          <div className="rounded-2xl border border-rose-900/50 bg-rose-950/30 p-6">
+            <p className="font-semibold text-rose-200">โหลดข้อมูลคอร์สไม่สำเร็จ</p>
+            <p className="mt-1 text-sm text-rose-300/80">{error}</p>
+            <p className="mt-2 text-xs text-rose-300/60">
+              เซิร์ฟเวอร์อาจกำลังตื่นอยู่ ลองอีกครั้งได้เลย
+            </p>
+            <button
+              onClick={load}
+              className="mt-4 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-2 text-sm font-semibold text-rose-200 transition hover:border-rose-400/50 hover:bg-rose-500/20"
+            >
+              ลองอีกครั้ง
+            </button>
           </div>
         ) : !data ? (
           <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
