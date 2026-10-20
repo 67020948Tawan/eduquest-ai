@@ -632,7 +632,14 @@ async def submit_answer(
     # แต่ reveal ข้อมูลเต็มกลับไป เพื่อไม่ให้ UI ค้าง/กดแล้วเงียบ
     if key in answered:
         prev = answered[key]
-        q_result2 = await db.execute(select(QuizQuestion).where(QuizQuestion.id == payload.question_id))
+        q_result2 = await db.execute(
+            select(QuizQuestion)
+            .join(Chapter, Chapter.id == QuizQuestion.chapter_id)
+            .where(
+                QuizQuestion.id == payload.question_id,
+                Chapter.course_id == session.course_id,
+            )
+        )
         q_old = q_result2.scalars().first()
         return {
             "already_answered": True,
@@ -648,10 +655,17 @@ async def submit_answer(
             "total_xp": session.xp or 0,
         }
 
-    q_result = await db.execute(select(QuizQuestion).where(QuizQuestion.id == payload.question_id))
+    q_result = await db.execute(
+        select(QuizQuestion)
+        .join(Chapter, Chapter.id == QuizQuestion.chapter_id)
+        .where(
+            QuizQuestion.id == payload.question_id,
+            Chapter.course_id == session.course_id,
+        )
+    )
     question = q_result.scalars().first()
     if not question:
-        raise HTTPException(status_code=404, detail="ไม่พบคำถามนี้")
+        raise HTTPException(status_code=404, detail="ไม่พบคำถามนี้ในคอร์สที่กำลังเล่น")
 
     modes = await _course_modes(db, session.course_id)
     state = _ensure_state(session, modes)
@@ -1005,10 +1019,17 @@ async def use_hint(
     if knowledge < 1:
         raise HTTPException(status_code=400, detail="Knowledge ไม่พอ — สร้างห้องสมุดแล้วตอบถูกเพื่อสะสม")
 
-    q_result = await db.execute(select(QuizQuestion).where(QuizQuestion.id == payload.question_id))
+    q_result = await db.execute(
+        select(QuizQuestion)
+        .join(Chapter, Chapter.id == QuizQuestion.chapter_id)
+        .where(
+            QuizQuestion.id == payload.question_id,
+            Chapter.course_id == session.course_id,
+        )
+    )
     question = q_result.scalars().first()
     if not question:
-        raise HTTPException(status_code=404, detail="ไม่พบคำถาม")
+        raise HTTPException(status_code=404, detail="ไม่พบคำถามในคอร์สที่กำลังเล่น")
 
     import random
 
@@ -1662,10 +1683,17 @@ async def raid_defend(
             "game_state": state,
         }
 
-    q_result = await db.execute(select(QuizQuestion).where(QuizQuestion.id == payload.question_id))
+    q_result = await db.execute(
+        select(QuizQuestion)
+        .join(Chapter, Chapter.id == QuizQuestion.chapter_id)
+        .where(
+            QuizQuestion.id == payload.question_id,
+            Chapter.course_id == session.course_id,
+        )
+    )
     question = q_result.scalars().first()
     if not question:
-        raise HTTPException(status_code=404, detail="ไม่พบคำถาม")
+        raise HTTPException(status_code=404, detail="ไม่พบคำถามในคอร์สที่กำลังเล่น")
 
     is_correct = payload.answer_index == question.correct_answer_index
     if not is_correct:
