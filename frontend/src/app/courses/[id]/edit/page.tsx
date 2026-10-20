@@ -43,6 +43,18 @@ const TYPE_STYLE: Record<QuestionType, string> = {
   ordering: "border-emerald-500/30 bg-emerald-950/50 text-emerald-300",
 };
 
+function orderingAnswer(question: EditableQuestion): string {
+  const items = question.ordering_items ?? [];
+  const order = question.correct_data;
+  if (Array.isArray(order) && order.length === items.length) {
+    return order
+      .map((index) => items[index])
+      .filter((value): value is string => Boolean(value))
+      .join(" → ");
+  }
+  return items.join(" → ");
+}
+
 const DIFFICULTY_LABEL: Record<string, string> = {
   easy: "ง่าย",
   medium: "ปานกลาง",
@@ -374,27 +386,41 @@ export default function CourseEditorPage() {
           </div>
         </section>
 
-        {error ? (
-          <div className="rounded-2xl border border-rose-900/50 bg-rose-950/30 p-6">
-            <p className="font-semibold text-rose-200">โหลดข้อมูลคอร์สไม่สำเร็จ</p>
-            <p className="mt-1 text-sm text-rose-300/80">{error}</p>
-            <p className="mt-2 text-xs text-rose-300/60">
-              เซิร์ฟเวอร์อาจกำลังตื่นอยู่ ลองอีกครั้งได้เลย
-            </p>
-            <button
-              onClick={load}
-              className="mt-4 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-2 text-sm font-semibold text-rose-200 transition hover:border-rose-400/50 hover:bg-rose-500/20"
-            >
-              ลองอีกครั้ง
-            </button>
-          </div>
-        ) : !data ? (
-          <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
-            <div className="h-80 animate-pulse rounded-2xl bg-slate-900/50" />
-            <div className="h-56 animate-pulse rounded-2xl bg-slate-900/50" />
-          </div>
+        {!data ? (
+          error ? (
+            <div className="rounded-2xl border border-rose-900/50 bg-rose-950/30 p-6">
+              <p className="font-semibold text-rose-200">โหลดข้อมูลคอร์สไม่สำเร็จ</p>
+              <p className="mt-1 text-sm text-rose-300/80">{error}</p>
+              <p className="mt-2 text-xs text-rose-300/60">
+                เซิร์ฟเวอร์อาจกำลังตื่นอยู่ ลองอีกครั้งได้เลย
+              </p>
+              <button
+                onClick={load}
+                className="mt-4 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-2 text-sm font-semibold text-rose-200 transition hover:border-rose-400/50 hover:bg-rose-500/20"
+              >
+                ลองอีกครั้ง
+              </button>
+            </div>
+          ) : (
+            <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
+              <div className="h-80 animate-pulse rounded-2xl bg-slate-900/50" />
+              <div className="h-56 animate-pulse rounded-2xl bg-slate-900/50" />
+            </div>
+          )
         ) : (
-          <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_300px] lg:items-start">
+          <>
+            {error && (
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-900/50 bg-rose-950/30 px-4 py-3">
+                <p className="text-sm text-rose-300">โหลดข้อมูลล่าสุดไม่สำเร็จ: {error}</p>
+                <button
+                  onClick={load}
+                  className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-200 transition hover:border-rose-400/50 hover:bg-rose-500/20"
+                >
+                  ลองอีกครั้ง
+                </button>
+              </div>
+            )}
+            <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_300px] lg:items-start">
             <aside className="order-last space-y-4 lg:order-2 lg:sticky lg:top-24">
               <div className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/60 shadow-xl shadow-slate-950/20">
                 <div className="border-b border-slate-800 bg-slate-900/70 px-5 py-4">
@@ -702,6 +728,7 @@ export default function CourseEditorPage() {
               </section>
             </div>
           </div>
+          </>
         )}
       </main>
     </div>
@@ -938,7 +965,7 @@ function ChapterEditor({
                           .join(", ")}
                       </>
                     ) : (
-                      <>เฉลย: {(question.ordering_items ?? []).join(" → ")}</>
+                      <>เฉลย: {orderingAnswer(question)}</>
                     )}
                   </p>
                 </div>
@@ -1008,9 +1035,13 @@ function QuestionForm({
 }) {
   const [type, setType] = useState<QuestionType>(initial?.question_type ?? "multiple_choice");
   const [question, setQuestion] = useState(initial?.question ?? "");
-  const [options, setOptions] = useState<string[]>(
-    initial?.options?.length ? initial.options : ["", "", "", ""]
-  );
+  const [options, setOptions] = useState<string[]>(() => {
+    const base = initial?.options ?? [];
+    if (initial?.question_type === "true_false") {
+      return [base[0] || "จริง", base[1] || "เท็จ"];
+    }
+    return base.length ? base : ["", "", "", ""];
+  });
   const [correctIndex, setCorrectIndex] = useState(initial?.correct_answer_index ?? 0);
   const [explanation, setExplanation] = useState(initial?.explanation ?? "");
   const [difficulty, setDifficulty] = useState(initial?.difficulty ?? "easy");
@@ -1021,9 +1052,15 @@ function QuestionForm({
       { left: "", right: "" },
     ]
   );
-  const [items, setItems] = useState<string[]>(
-    initial?.ordering_items?.length ? initial.ordering_items : ["", "", ""]
-  );
+  const [items, setItems] = useState<string[]>(() => {
+    const raw = initial?.ordering_items ?? [];
+    const order = initial?.correct_data;
+    const ordered =
+      Array.isArray(order) && order.length === raw.length
+        ? order.map((index) => raw[index])
+        : raw;
+    return ordered.length ? ordered : ["", "", ""];
+  });
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -1069,6 +1106,13 @@ function QuestionForm({
         return;
       }
       payload = { ...base, question_type: type, ordering_items: cleaned };
+    } else if (type === "true_false") {
+      payload = {
+        ...base,
+        question_type: type,
+        options: [options[0]?.trim() || "จริง", options[1]?.trim() || "เท็จ"],
+        correct_answer_index: correctIndex === 1 ? 1 : 0,
+      };
     } else {
       const cleaned = options.map((o) => o.trim()).filter(Boolean);
       if (cleaned.length < 2) {
@@ -1118,8 +1162,12 @@ function QuestionForm({
               type="button"
               aria-pressed={type === t}
               onClick={() => {
+                if (t === type) return;
                 setType(t);
-                if (t === "true_false") setCorrectIndex(0);
+                if (t === "true_false") {
+                  setCorrectIndex(0);
+                  setOptions(["จริง", "เท็จ"]);
+                }
               }}
               className={`rounded-xl border px-2 py-2 text-xs font-semibold transition ${
                 type === t

@@ -169,14 +169,21 @@ function MatchingBoard({
                   leftRefs.current[i] = el;
                 }}
                 type="button"
-                disabled={disabled || isMatched}
+                disabled={disabled}
+                title={isMatched ? "คลิกเพื่อยกเลิกการจับคู่" : undefined}
                 onClick={() => {
-                  if (disabled || isMatched) return;
+                  if (disabled) return;
+                  if (isMatched) {
+                    const next = { ...(value ?? {}) };
+                    delete next[pair.left];
+                    onChange(next);
+                    return;
+                  }
                   onChange({ ...(value ?? {}), __selectedLeft: pair.left });
                 }}
                 className={`relative w-full break-words rounded-lg border px-2.5 py-2 text-left text-xs transition-all disabled:cursor-default sm:px-3 sm:text-sm ${
                   isMatched
-                    ? "border-emerald-500 bg-emerald-950/40 text-emerald-200"
+                    ? "border-emerald-500 bg-emerald-950/40 text-emerald-200 hover:border-rose-400/70 hover:bg-rose-950/20"
                     : isPicked
                       ? "border-indigo-500 bg-indigo-950/40 text-indigo-200 ring-1 ring-indigo-500"
                       : "border-slate-700 bg-slate-950 text-slate-300 hover:border-indigo-500/60"
@@ -1491,13 +1498,22 @@ function CoursePlayInner() {
                       correctOrder?.length === items.length &&
                       correctOrder.every((value, i) => value === i);
                     // ข้อมูลเก่าที่ลำดับถูกอยู่แล้ว → สลับให้เริ่มต้นไม่ตรงเฉลย
-                    const shuffledFallback = identityOrder
-                      .map((value, i) => ({
-                        value,
-                        key: Math.abs(Math.sin((q.id + 1) * (i + 1) * 12.9898) * 10000),
-                      }))
-                      .sort((a, b) => a.key - b.key)
-                      .map((x) => x.value);
+                    const shuffledFallback = (() => {
+                      const arr = [...identityOrder];
+                      let seed = ((q.id * 2654435761) >>> 0) || 1;
+                      const rand = () => {
+                        seed = (seed * 1664525 + 1013904223) >>> 0;
+                        return seed / 4294967296;
+                      };
+                      for (let i = arr.length - 1; i > 0; i--) {
+                        const j = Math.floor(rand() * (i + 1));
+                        [arr[i], arr[j]] = [arr[j], arr[i]];
+                      }
+                      if (arr.length > 1 && arr.every((value, i) => value === i)) {
+                        [arr[0], arr[1]] = [arr[1], arr[0]];
+                      }
+                      return arr;
+                    })();
                     const currentOrder = hasOrder
                       ? stored
                       : correctIsIdentity
