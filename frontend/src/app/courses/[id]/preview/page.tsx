@@ -1426,10 +1426,18 @@ function CoursePlayInner() {
                                 if (from !== -1 && from !== to) moveItem(from, to);
                               }}
                               onPointerUp={(e) => {
-                                e.currentTarget.releasePointerCapture(e.pointerId);
                                 setDraggingOrder(null);
+                                if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+                                  e.currentTarget.releasePointerCapture(e.pointerId);
+                                }
                               }}
-                              onPointerCancel={() => setDraggingOrder(null)}
+                              onPointerCancel={(e) => {
+                                setDraggingOrder(null);
+                                if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+                                  e.currentTarget.releasePointerCapture(e.pointerId);
+                                }
+                              }}
+                              onLostPointerCapture={() => setDraggingOrder(null)}
                               className={`group cursor-grab touch-none select-none rounded-lg border px-3 py-2 text-sm transition-all active:cursor-grabbing ${
                                 hasOrder
                                   ? "border-emerald-500/70 bg-emerald-950/30 text-emerald-100"
