@@ -8,7 +8,6 @@ import { PixelSprite, PixelScene, BattleStage, type BattlePhase } from "@/compon
 import BasePanel from "@/components/game/BasePanel";
 import DialogueBox, { type DialogueNpc } from "@/components/game/DialogueBox";
 import WorldMapView, { type MapNode } from "@/components/game/WorldMapView";
-import { useTheme } from "@/components/game/ThemeProvider";
 import { useAuthToken } from "@/lib/useAuthToken";
 import {
   getCourseStructure,
@@ -316,19 +315,6 @@ function CoursePlayInner() {
   const [dialogue, setDialogue] = useState<DialogueNpc | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
 
-  // XP ที่ได้ระหว่างเล่น → อัปเดตแถบ XP/เลเวลบน header (Gamification)
-  const { addXP } = useTheme();
-  const lastSyncedXpRef = useRef<number | null>(null);
-  useEffect(() => {
-    if (lastSyncedXpRef.current === null) {
-      lastSyncedXpRef.current = xp;
-      return;
-    }
-    const delta = xp - lastSyncedXpRef.current;
-    if (delta > 0) addXP(delta);
-    lastSyncedXpRef.current = xp;
-  }, [xp, addXP]);
-
   function pushToast(msg: string, ok = true) {
     const id = ++toastId;
     setToasts((prev) => [...prev.slice(-3), { id, msg, ok }]);
@@ -435,13 +421,6 @@ function CoursePlayInner() {
   }, [enemyHp]);
 
   // ---- Derived ----
-  const levels = useMemo(() => data?.gamification.levels ?? [], [data]);
-  const currentLevel = useMemo(() => {
-    let lv = { level: 1, title: "Novice", xp_required: 0 };
-    for (const l of levels) if (xp >= l.xp_required) lv = l;
-    return lv;
-  }, [levels, xp]);
-
   const progressPercent =
     data && data.chapters.length > 0
       ? Math.round((completedChapters.length / data.chapters.length) * 100)
@@ -808,7 +787,7 @@ function CoursePlayInner() {
                   🌍 {world.world_name || data.course_title}
                 </h1>
                 <p className="text-xs text-slate-500">
-                  ⭐ Lv.{currentLevel.level} · 🔥 XP {xp.toLocaleString()}
+                  🔥 XP {xp.toLocaleString()}
                   {modes.length > 0 && ` · ${modes.length} Game Mode${modes.length > 1 ? "s" : ""}`}
                 </p>
               </div>
@@ -1782,7 +1761,7 @@ function CoursePlayInner() {
                 <p className="text-4xl">🏁</p>
                 <h3 className="mt-2 text-xl font-bold text-emerald-300">{checkpoint.message}</h3>
                 <p className="mt-2 text-sm text-emerald-200/90">
-                  Bonus +{checkpoint.bonus_xp} XP · Total {checkpoint.total_xp} XP · Lv.{checkpoint.level.level}
+                  Bonus +{checkpoint.bonus_xp} XP · Total {checkpoint.total_xp} XP
                 </p>
                 {checkpoint.badges_earned.length > 0 && (
                   <div className="mt-3 flex flex-wrap justify-center gap-2">
