@@ -99,6 +99,17 @@ function CoursePlayInner() {
   const [hintLoading, setHintLoading] = useState<number | null>(null);
   const [draggingOrder, setDraggingOrder] = useState<{ qid: number; itemIndex: number } | null>(null);
 
+  useEffect(() => {
+    if (!draggingOrder) return;
+    const stop = () => setDraggingOrder(null);
+    window.addEventListener("pointerup", stop);
+    window.addEventListener("pointercancel", stop);
+    return () => {
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+    };
+  }, [draggingOrder]);
+
   // Combat state
   const [enemyHp, setEnemyHp] = useState(0);
   const [enemyShake, setEnemyShake] = useState(false);
@@ -1393,7 +1404,20 @@ function CoursePlayInner() {
                     };
 
                     return (
-                      <div className="space-y-2">
+                      <div
+                        className="space-y-2"
+                        onPointerMove={(e) => {
+                          if (draggingOrder?.qid !== q.id) return;
+                          const target = (
+                            document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null
+                          )?.closest("[data-order-position]") as HTMLElement | null;
+                          if (!target) return;
+                          const to = Number(target.dataset.orderPosition);
+                          if (Number.isNaN(to)) return;
+                          const from = currentOrder.indexOf(draggingOrder.itemIndex);
+                          if (from !== -1 && from !== to) moveItem(from, to);
+                        }}
+                      >
                         <p className="text-xs font-semibold text-slate-400 mb-2">
                           ลากบล็อคขึ้นลงได้เลย หรือใช้ปุ่มลูกศร
                         </p>
@@ -1411,33 +1435,8 @@ function CoursePlayInner() {
                                 if (locked || submittingId === q.id) return;
                                 if (e.button !== 0) return;
                                 e.preventDefault();
-                                e.currentTarget.setPointerCapture(e.pointerId);
                                 setDraggingOrder({ qid: q.id, itemIndex });
                               }}
-                              onPointerMove={(e) => {
-                                if (draggingOrder?.qid !== q.id) return;
-                                const target = (
-                                  document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null
-                                )?.closest("[data-order-position]") as HTMLElement | null;
-                                if (!target) return;
-                                const to = Number(target.dataset.orderPosition);
-                                if (Number.isNaN(to)) return;
-                                const from = currentOrder.indexOf(draggingOrder.itemIndex);
-                                if (from !== -1 && from !== to) moveItem(from, to);
-                              }}
-                              onPointerUp={(e) => {
-                                setDraggingOrder(null);
-                                if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-                                  e.currentTarget.releasePointerCapture(e.pointerId);
-                                }
-                              }}
-                              onPointerCancel={(e) => {
-                                setDraggingOrder(null);
-                                if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-                                  e.currentTarget.releasePointerCapture(e.pointerId);
-                                }
-                              }}
-                              onLostPointerCapture={() => setDraggingOrder(null)}
                               className={`group cursor-grab touch-none select-none rounded-lg border px-3 py-2 text-sm transition-all active:cursor-grabbing ${
                                 hasOrder
                                   ? "border-emerald-500/70 bg-emerald-950/30 text-emerald-100"
