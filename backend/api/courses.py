@@ -28,7 +28,12 @@ from schemas.course import CourseResponse, CourseUpdate
 from core.deps import get_current_user
 from services.extractors import ALLOWED_EXTENSIONS
 from services.art_catalog import resolve_asset, extract_keywords
-from services.game_director import analyze_content, recommend_game_genres, generate_game
+from services.game_director import (
+    analyze_content,
+    analyze_content_sufficiency,
+    recommend_game_genres,
+    generate_game,
+)
 
 router = APIRouter(prefix="/api", tags=["courses"])
 

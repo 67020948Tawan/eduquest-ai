@@ -11,6 +11,7 @@ import SiteHeader from "@/components/SiteHeader";
 import { useAuthToken } from "@/lib/useAuthToken";
 import {
   createCourse,
+  deleteCourse,
   uploadDocument,
   generateGame,
   analyzeContentSufficiency,
@@ -54,6 +55,17 @@ export default function CreateCoursePage() {
   const [error, setError] = useState<string | null>(null);
   const [sufficiency, setSufficiency] = useState<ContentSufficiency | null>(null);
   const [sufficiencyLoading, setSufficiencyLoading] = useState(false);
+  // คอร์ส draft ที่สร้างตอนกดตรวจเนื้อหา — ใช้ต่อตอนกดสร้างเกม (กันสร้างซ้ำ)
+  const [draftCourseId, setDraftCourseId] = useState<number | null>(null);
+
+  // ล้าง draft เก่าเมื่อเปลี่ยนไฟล์/ความยาว/โหมด (ผลตรวจเนื้อหาเดิมใช้ไม่ได้แล้ว)
+  function discardDraft() {
+    setSufficiency(null);
+    if (draftCourseId) {
+      deleteCourse(draftCourseId).catch(() => {});
+      setDraftCourseId(null);
+    }
+  }
 
   useEffect(() => {
     if (token === null) router.replace("/login");
@@ -70,6 +82,7 @@ export default function CreateCoursePage() {
   );
 
   function toggleMode(id: string) {
+    if (draftCourseId) discardDraft();
     setModes((prev) =>
       prev.includes(id) ? prev.filter((m) => m !== id) : [...prev, id]
     );
@@ -87,7 +100,18 @@ export default function CreateCoursePage() {
     try {
       setError(null);
       setSufficiencyLoading(true);
+      setSufficiency(null);
       setStep(1);
+
+      // ถ้ามี draft เก่าจากการกดตรวจรอบก่อน ให้ลบทิ้งก่อน (กันคอร์สซ้ำ)
+      if (draftCourseId) {
+        try {
+          await deleteCourse(draftCourseId);
+        } catch {
+          /* ignore */
+        }
+        setDraftCourseId(null);
+      }
 
       // Step 1: create course (draft) first so we have course_id
       const course = await createCourse({
@@ -101,6 +125,7 @@ export default function CreateCoursePage() {
         questionTypes,
         questionsPerChapter,
       });
+      setDraftCourseId(course.id);
 
       // Step 2: upload document
       await uploadDocument(course.id, file);
@@ -125,30 +150,32 @@ export default function CreateCoursePage() {
       setBusy(true);
       setError(null);
 
-      // Re-create course with final settings (overwrite draft from check step)
-      // Note: course was already created in handleCheckContent; we need its id.
-      // For simplicity, we re-create here — but better to store course id in state.
-      // Since we don't have course id stored, we'll regenerate by re-calling createCourse.
-      // In production, store courseId in state after check step.
-      const course = await createCourse({
-        title: titleFromFileName || "My Learning Game",
-        description: "",
-        subject: "",
-        difficulty: "beginner",
-        gameModes: modes,
-        visualStyle: "pixel_art" as VisualStyle,
+      // ใช้คอร์ส draft ที่สร้างตอนตรวจเนื้อหา (ถ้ายังมี) — ไม่สร้างซ้ำ
+      let courseId = draftCourseId;
+      if (!courseId) {
+        const course = await createCourse({
+          title: titleFromFileName || "My Learning Game",
+          description: "",
+          subject: "",
+          difficulty: "beginner",
+          gameModes: modes,
+          visualStyle: "pixel_art" as VisualStyle,
+          gameLength,
+          questionTypes,
+          questionsPerChapter,
+        });
+        courseId = course.id;
+        setDraftCourseId(course.id);
+        await uploadDocument(course.id, file);
+      }
+
+      await generateGame(courseId, {
         gameLength,
         questionTypes,
-        questionsPerChapter,
       });
 
-      await uploadDocument(course.id, file);
-      await generateGame(course.id, {
-        gameLength,
-        questionTypes,
-      });
-
-      router.push(`/courses/${course.id}/preview`);
+      setDraftCourseId(null);
+      router.push(`/courses/${courseId}/preview`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "สร้างเกมไม่สำเร็จ");
       setStep(0);
@@ -193,7 +220,10 @@ export default function CreateCoursePage() {
               type="file"
               accept=".pdf,.docx,.pptx,.txt,.md"
               disabled={busy}
-              onChange={(e) => setFile(e.target.files?.[0] || null)}
+              onChange={(e) => {
+                if (draftCourseId) discardDraft();
+                setFile(e.target.files?.[0] || null);
+              }}
               className="mt-4 w-full cursor-pointer rounded-xl border border-dashed border-slate-600 bg-slate-950 px-4 py-8 text-center text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-600 file:px-5 file:py-2.5 file:font-semibold file:text-white hover:border-indigo-500/60 hover:file:bg-indigo-500"
             />
             <p className="mt-2 text-xs text-slate-500">รองรับ PDF / DOCX / PPTX / TXT (รวม PDF ภาพสแกน)</p>
@@ -222,7 +252,10 @@ export default function CreateCoursePage() {
                       <button
                         key={l.id}
                         type="button"
-                        onClick={() => setGameLength(l.id)}
+                        onClick={() => {
+                          if (l.id !== gameLength && draftCourseId) discardDraft();
+                          setGameLength(l.id);
+                        }}
                         className={`rounded-lg border-2 p-3 text-left transition-all ${
                           active
                             ? "border-emerald-500 bg-emerald-950/30 shadow-md shadow-emerald-950/30"
