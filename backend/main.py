@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
-from database import engine, init_db
+from database import engine, init_db, SessionLocal
 from api.auth import router as auth_router
 from api.courses import router as courses_router
 from api.play import router as play_router
@@ -34,10 +34,27 @@ async def lifespan(app: FastAPI):
     """lifecycle ของแอป: startup → init_db() สร้างตาราง, shutdown → ปิด connection pool"""
     # Startup: create tables + auto-migrate new columns
     await init_db()
+    await _reset_stuck_generations()
     print("✅ Database ready")
     yield
     # Shutdown
     await engine.dispose()
+
+
+async def _reset_stuck_generations() -> None:
+    """งาน generate เก็บในหน่วยความจำ — หลังรีสตาร์ทให้คืนคอร์สที่ค้าง GENERATING เป็น DRAFT"""
+    from sqlalchemy import select
+    from models.course import Course, CourseStatus
+
+    async with SessionLocal() as db:
+        rows = await db.execute(select(Course).where(Course.status == CourseStatus.GENERATING))
+        stuck = list(rows.scalars().all())
+        if not stuck:
+            return
+        for course in stuck:
+            course.status = CourseStatus.DRAFT
+        await db.commit()
+        print(f"♻️ Reset {len(stuck)} stuck GENERATING course(s) to DRAFT")
 
 
 app = FastAPI(

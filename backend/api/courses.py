@@ -7,17 +7,20 @@ import uuid
 import json
 import shutil
 import secrets
+import asyncio
+import time
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 from sqlalchemy import delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 
-from database import get_db
+from database import SessionLocal, get_db
+from services import generation_jobs
 from models.user import User
 from models.document import Document
 from models.course import Course, CourseStatus
@@ -763,48 +766,105 @@ async def recommend_genres(
     return ai_result
 
 
-@router.post("/courses/{course_id}/generate")
-async def generate_course(
+async def _tick_generation_progress(
     course_id: int,
-    visual_style: str = Form(None),
-    ai_instruction: str = Form(None),
-    game_length: str = Form(None),
-    question_types: str = Form(None),
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    course = await get_owned_course(course_id, current_user, db)
+    start: int,
+    end: int,
+    step: str,
+    message: str,
+    interval: float = 3.0,
+) -> None:
+    """ขยับแถบความคืบหน้าระหว่างรอ AI ตอบ (ไม่ให้หน้าจอค้างที่เดิมนาน ๆ)"""
+    progress = start
+    try:
+        while progress < end:
+            await asyncio.sleep(interval)
+            progress = min(end, progress + 2)
+            generation_jobs.update(
+                course_id, step=step, progress=progress, message=message
+            )
+    except asyncio.CancelledError:
+        return
+
+
+async def _mark_generation_failed(course_id: int, message: str) -> None:
+    """คืนคอร์สที่ค้าง GENERATING กลับเป็น DRAFT และบันทึก error ให้ frontend อ่าน"""
+    generation_jobs.fail(course_id, message)
+    try:
+        async with SessionLocal() as db:
+            course = await db.get(Course, course_id)
+            if course and course.status == CourseStatus.GENERATING:
+                course.status = CourseStatus.DRAFT
+                await db.commit()
+    except Exception as exc:  # pragma: no cover - best effort cleanup
+        print(f"❌ [Generate] reset course {course_id} failed: {exc}")
+
+
+async def _run_generation(
+    db: AsyncSession,
+    course_id: int,
+    visual_style: Optional[str],
+    ai_instruction: Optional[str],
+    game_length: Optional[str],
+    question_types: Optional[list[str]],
+) -> dict:
+    """สร้างเกมจริง — เรียกจาก background task พร้อมอัปเดตความคืบหน้าทุกช่วง"""
+    course = await db.get(Course, course_id)
+    if not course:
+        raise RuntimeError("ไม่พบคอร์สนี้ในระบบ")
     document = await get_latest_document(course_id, db)
 
-    await enforce_quota(current_user, db)
-    await db.commit()
+    generation_jobs.update(
+        course_id,
+        status="running",
+        step="extract",
+        progress=8,
+        message="กำลังอ่านและวิเคราะห์เอกสารบทเรียน...",
+    )
 
     if visual_style:
         course.visual_style = visual_style
     if game_length:
         course.game_length = game_length
-    if question_types:
-        try:
-            course.question_types = json.loads(question_types)
-        except Exception:
-            pass
+    if question_types is not None:
+        course.question_types = question_types
     course.status = CourseStatus.GENERATING
     await db.commit()
 
-    ai_result = await generate_game(
-        file_path=document.file_path,
-        game_modes=course.game_modes or ["standard_quiz"],
-        visual_style=course.visual_style or "pixel_art",
-        ai_instruction=ai_instruction,
-        game_length=course.game_length or "medium",
-        question_types=course.question_types or ["multiple_choice"],
+    generation_jobs.update(
+        course_id,
+        step="ai",
+        progress=25,
+        message="AI กำลังออกแบบโลก บทเรียน และคำถาม...",
     )
+    ticker = asyncio.create_task(
+        _tick_generation_progress(
+            course_id, 25, 68, "ai", "AI กำลังออกแบบโลก บทเรียน และคำถาม..."
+        )
+    )
+    try:
+        ai_result = await generate_game(
+            file_path=document.file_path,
+            game_modes=course.game_modes or ["standard_quiz"],
+            visual_style=course.visual_style or "pixel_art",
+            ai_instruction=ai_instruction,
+            game_length=course.game_length or "medium",
+            question_types=course.question_types or ["multiple_choice"],
+        )
+    finally:
+        ticker.cancel()
+        await asyncio.gather(ticker, return_exceptions=True)
 
     if "error" in ai_result:
         print(f"❌ [Generate] course_id={course_id} failed: {ai_result['error']}")
-        course.status = CourseStatus.DRAFT
-        await db.commit()
-        raise HTTPException(status_code=500, detail=ai_result["error"])
+        raise RuntimeError(ai_result["error"])
+
+    generation_jobs.update(
+        course_id,
+        step="validate",
+        progress=74,
+        message="ตรวจสอบคำถาม เฉลย และรูปแบบคำตอบ...",
+    )
 
     # ---- เคลียร์โครงสร้างเดิมแล้วสร้างใหม่จากผลลัพธ์ AI ----
     old = await db.execute(
@@ -827,8 +887,15 @@ async def generate_course(
         s.status = "abandoned"
     await db.flush()
 
+    total_chapters = max(1, len(ai_result["chapters"]))
     created_chapter_ids = []
     for idx, chapter_data in enumerate(ai_result["chapters"]):
+        generation_jobs.update(
+            course_id,
+            step="save",
+            progress=78 + int(14 * idx / total_chapters),
+            message=f"บันทึกบทที่ {idx + 1}/{total_chapters} และคำถาม...",
+        )
         new_chapter = Chapter(course_id=course_id, title=chapter_data["title"], order_index=idx)
         db.add(new_chapter)
         await db.flush()
@@ -868,6 +935,12 @@ async def generate_course(
     game_config["chapter_map"] = created_chapter_ids
 
     # 🎨 AI ART DIRECTOR — เลือก asset จากคลังโค้ด → attach อัตโนมัติ
+    generation_jobs.update(
+        course_id,
+        step="art",
+        progress=93,
+        message="จัดวางภาพ ตัวละคร และฉากประกอบ...",
+    )
     course.game_config = game_config
     art_bible = run_art_director(course)
     game_config["art_bible"] = art_bible
@@ -875,6 +948,13 @@ async def generate_course(
 
     course.status = CourseStatus.READY
     await db.commit()
+
+    generation_jobs.update(
+        course_id,
+        step="ready",
+        progress=98,
+        message="เกมพร้อมแล้ว กำลังเตรียมหน้าจอ...",
+    )
 
     return {
         "message": (
@@ -894,6 +974,168 @@ async def generate_course(
             "hero_id": art_bible["hero_id"],
             "total_assets": 1 + len(art_bible["npcs"]) + len(art_bible["enemies"]) + len(art_bible["bosses"]),
         },
+    }
+
+
+async def _run_generation_safe(
+    course_id: int,
+    visual_style: Optional[str],
+    ai_instruction: Optional[str],
+    game_length: Optional[str],
+    question_types: Optional[list[str]],
+) -> None:
+    """Background task entrypoint — จัดการ session/error ให้ runner หลัก"""
+    try:
+        async with SessionLocal() as db:
+            result = await _run_generation(
+                db,
+                course_id,
+                visual_style,
+                ai_instruction,
+                game_length,
+                question_types,
+            )
+        generation_jobs.succeed(course_id, result)
+    except asyncio.CancelledError:
+        await _mark_generation_failed(course_id, "งานสร้างเกมถูกยกเลิก")
+        raise
+    except HTTPException as exc:
+        message = str(exc.detail)
+        print(f"❌ [Generate] course_id={course_id} failed: {message}")
+        await _mark_generation_failed(course_id, message)
+    except Exception as exc:
+        message = str(exc) or "เกิดข้อผิดพลาดระหว่างสร้างเกม"
+        print(f"❌ [Generate] course_id={course_id} crashed: {exc}")
+        await _mark_generation_failed(course_id, message)
+
+
+@router.post("/courses/{course_id}/generate", status_code=202)
+async def generate_course(
+    course_id: int,
+    background_tasks: BackgroundTasks,
+    visual_style: str = Form(None),
+    ai_instruction: str = Form(None),
+    game_length: str = Form(None),
+    question_types: str = Form(None),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    เริ่มสร้างเกมแบบ background job แล้วคืนสถานะทันที
+    frontend จะ poll ที่ GET /courses/{id}/generation-status เพื่อดูความคืบหน้า
+    """
+    course = await get_owned_course(course_id, current_user, db)
+    await get_latest_document(course_id, db)
+
+    job, created = generation_jobs.start(course_id)
+    if not created:
+        return {
+            "message": "เกมนี้กำลังถูกสร้างอยู่แล้ว",
+            "already_running": True,
+            "job": generation_jobs.payload(job),
+        }
+
+    try:
+        await enforce_quota(current_user, db)
+        await db.commit()
+    except HTTPException as exc:
+        generation_jobs.fail(course_id, str(exc.detail))
+        raise
+    except Exception:
+        generation_jobs.fail(course_id, "เริ่มสร้างเกมไม่สำเร็จ กรุณาลองใหม่")
+        raise
+
+    parsed_types: Optional[list[str]] = None
+    if question_types:
+        try:
+            raw_types = json.loads(question_types)
+            if isinstance(raw_types, list):
+                parsed_types = [str(t) for t in raw_types]
+        except Exception:
+            parsed_types = None
+
+    background_tasks.add_task(
+        _run_generation_safe,
+        course_id,
+        visual_style,
+        ai_instruction,
+        game_length,
+        parsed_types,
+    )
+
+    fresh = generation_jobs.get(course_id) or job
+    return {
+        "message": "เริ่มสร้างเกมแล้ว ระบบกำลังทำงานเบื้องหลัง",
+        "already_running": False,
+        "job": generation_jobs.payload(fresh),
+    }
+
+
+@router.get("/courses/{course_id}/generation-status")
+async def generation_status(
+    course_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """สถานะงานสร้างเกม — ใช้ poll จากหน้า Create"""
+    course = await get_owned_course(course_id, current_user, db)
+    job = generation_jobs.get(course_id)
+
+    if job:
+        # กันงานค้าง: ถ้าไม่มีอัปเดตนานเกิน 15 นาที ถือว่าล้มเหลว
+        if (
+            job.status in generation_jobs.ACTIVE_STATUSES
+            and time.time() - job.updated_at > 15 * 60
+        ):
+            await _mark_generation_failed(
+                course_id, "งานสร้างเกมใช้เวลานานเกินไป กรุณากดสร้างอีกครั้ง"
+            )
+            job = generation_jobs.get(course_id)
+        if job:
+            return generation_jobs.payload(job)
+
+    if course.status == CourseStatus.GENERATING:
+        # ไม่มี job ในหน่วยความจำ = โปรเซสรีสตาร์ทระหว่างสร้าง → คืนคอร์สให้แก้ต่อได้
+        course.status = CourseStatus.DRAFT
+        await db.commit()
+        return {
+            "course_id": course_id,
+            "status": "error",
+            "step": "error",
+            "progress": 0,
+            "message": "งานสร้างเกมหยุดกลางทาง",
+            "error": "เซิร์ฟเวอร์รีสตาร์ทระหว่างสร้างเกม กรุณากดสร้างอีกครั้ง",
+            "result": None,
+            "started_at": None,
+            "updated_at": None,
+            "finished_at": None,
+        }
+
+    if course.status in (CourseStatus.READY, CourseStatus.PUBLISHED):
+        return {
+            "course_id": course_id,
+            "status": "ready",
+            "step": "ready",
+            "progress": 100,
+            "message": "สร้างเกมสำเร็จแล้ว",
+            "error": None,
+            "result": None,
+            "started_at": None,
+            "updated_at": None,
+            "finished_at": None,
+        }
+
+    return {
+        "course_id": course_id,
+        "status": "idle",
+        "step": "idle",
+        "progress": 0,
+        "message": "ยังไม่ได้เริ่มสร้างเกม",
+        "error": None,
+        "result": None,
+        "started_at": None,
+        "updated_at": None,
+        "finished_at": None,
     }
 
 

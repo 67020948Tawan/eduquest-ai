@@ -592,7 +592,29 @@ export interface GenerateResult {
   badges_created: number;
 }
 
-export async function generateGame(
+export type GenerationJobStatus = "queued" | "running" | "ready" | "error" | "idle";
+
+export interface GenerationJob {
+  course_id: number;
+  status: GenerationJobStatus;
+  step: string;
+  message: string;
+  progress: number;
+  error: string | null;
+  result: GenerateResult | null;
+  started_at: number | null;
+  updated_at: number | null;
+  finished_at: number | null;
+}
+
+export interface StartGenerationResponse {
+  message: string;
+  already_running: boolean;
+  job: GenerationJob;
+}
+
+/** เริ่มสร้างเกมแบบ background job — คืนสถานะทันที ไม่ต้องรอ AI หลายนาที */
+export async function startGeneration(
   courseId: number,
   opts: {
     visualStyle?: VisualStyle;
@@ -600,20 +622,21 @@ export async function generateGame(
     gameLength?: GameLength;
     questionTypes?: QuestionType[];
   } = {}
-): Promise<GenerateResult> {
+): Promise<StartGenerationResponse> {
   const formData = new FormData();
   if (opts.visualStyle) formData.append("visual_style", opts.visualStyle);
   if (opts.aiInstruction) formData.append("ai_instruction", opts.aiInstruction);
   if (opts.gameLength) formData.append("game_length", opts.gameLength);
   if (opts.questionTypes) formData.append("question_types", JSON.stringify(opts.questionTypes));
-  return request<GenerateResult>(`/api/courses/${courseId}/generate`, {
+  return request<StartGenerationResponse>(`/api/courses/${courseId}/generate`, {
     method: "POST",
     body: formData,
   });
 }
 
-export const generateCourse = generateGame;
-export const generateGamification = generateGame;
+export async function getGenerationStatus(courseId: number): Promise<GenerationJob> {
+  return request<GenerationJob>(`/api/courses/${courseId}/generation-status`);
+}
 
 export interface ContentSufficiency {
   sufficient: boolean;

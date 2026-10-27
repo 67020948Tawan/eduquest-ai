@@ -5,7 +5,7 @@
 // ขั้น 1: อัปโหลดไฟล์ → ขั้น 2: ตั้งค่าเกม (ความยาว + ประเภทคำถาม) → ตรวจสอบเนื้อหา → สร้าง
 // ==============================================================================
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import SiteHeader from "@/components/SiteHeader";
 import { useAuthToken, useHydrated } from "@/lib/useAuthToken";
@@ -13,12 +13,14 @@ import {
   createCourse,
   deleteCourse,
   uploadDocument,
-  generateGame,
+  startGeneration,
+  getGenerationStatus,
   analyzeContentSufficiency,
   type VisualStyle,
   type GameLength,
   type QuestionType,
   type ContentSufficiency,
+  type GenerationJob,
 } from "@/lib/api";
 
 const GAME_MODES = [
@@ -41,6 +43,76 @@ const QUESTION_TYPE_OPTIONS: { id: QuestionType; title: string; desc: string }[]
   { id: "ordering", title: "🔢 เรียงลำดับ", desc: "เรียงขั้นตอนให้ถูกต้อง" },
 ];
 
+// ขั้นตอนที่ backend รายงานผ่าน job.step — ใช้แสดง checklist ระหว่างสร้างเกม
+const GENERATION_STEPS: { id: string; label: string }[] = [
+  { id: "extract", label: "อ่านและวิเคราะห์เอกสารบทเรียน" },
+  { id: "ai", label: "AI ออกแบบโลก บทเรียน และคำถาม" },
+  { id: "validate", label: "ตรวจสอบคำถาม เฉลย และรูปแบบคำตอบ" },
+  { id: "save", label: "บันทึกบทเรียนและคำถามลงระบบ" },
+  { id: "art", label: "จัดวางภาพ ตัวละคร และฉากประกอบ" },
+  { id: "ready", label: "เตรียมหน้าจอเกมพร้อมเล่น" },
+];
+
+// เก็บ course id ที่กำลังสร้างไว้ เพื่อกลับมาติดตามต่อได้ถ้าปิดหน้า
+const GENERATION_KEY = "eduquest_generation_course";
+const POLL_INTERVAL_MS = 1500;
+const GENERATION_TIMEOUT_MS = 10 * 60 * 1000;
+const MAX_POLL_ERRORS = 5;
+
+type WaitResult = {
+  job: GenerationJob | null;
+  timedOut: boolean;
+  cancelled: boolean;
+  pollError: string | null;
+};
+
+/**
+ * poll สถานะงานสร้างเกมจนจบ
+ * - ต้องอัปเดต UI ทุก 1.5 วินาที
+ * - ทน network error ชั่วคราว (สูงสุด 5 ครั้งติดกัน)
+ * - หยุดเมื่อถูกยกเลิก (ออกจากหน้า) หรือครบ 10 นาที
+ */
+async function waitForGeneration(
+  courseId: number,
+  isCancelled: () => boolean,
+  onUpdate: (job: GenerationJob) => void
+): Promise<WaitResult> {
+  const deadline = Date.now() + GENERATION_TIMEOUT_MS;
+  let lastJob: GenerationJob | null = null;
+  let pollErrors = 0;
+
+  while (!isCancelled()) {
+    if (Date.now() > deadline) {
+      return { job: lastJob, timedOut: true, cancelled: false, pollError: null };
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+    if (isCancelled()) break;
+
+    try {
+      const status = await getGenerationStatus(courseId);
+      pollErrors = 0;
+      lastJob = status;
+      onUpdate(status);
+      if (status.status !== "queued" && status.status !== "running") {
+        return { job: status, timedOut: false, cancelled: false, pollError: null };
+      }
+    } catch {
+      pollErrors += 1;
+      if (pollErrors >= MAX_POLL_ERRORS) {
+        return {
+          job: lastJob,
+          timedOut: false,
+          cancelled: false,
+          pollError: "การเชื่อมต่อขาดหายระหว่างติดตามสถานะ",
+        };
+      }
+    }
+  }
+
+  return { job: lastJob, timedOut: false, cancelled: true, pollError: null };
+}
+
 export default function CreateCoursePage() {
   const router = useRouter();
   const token = useAuthToken();
@@ -57,12 +129,16 @@ export default function CreateCoursePage() {
   ]);
   const [questionsPerChapter, setQuestionsPerChapter] = useState(3);
   const [busy, setBusy] = useState(false);
-  const [step, setStep] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [sufficiency, setSufficiency] = useState<ContentSufficiency | null>(null);
   const [sufficiencyLoading, setSufficiencyLoading] = useState(false);
   // คอร์ส draft ที่สร้างตอนกดตรวจเนื้อหา — ใช้ต่อตอนกดสร้างเกม (กันสร้างซ้ำ)
   const [draftCourseId, setDraftCourseId] = useState<number | null>(null);
+  // สถานะงานสร้างเกมที่ backend รายงานกลับมา (queued/running/ready/error)
+  const [job, setJob] = useState<GenerationJob | null>(null);
+  const [resumeReadyCourseId, setResumeReadyCourseId] = useState<number | null>(null);
+  // true = ผู้ใช้ออกจากหน้าแล้ว → หยุด poll (งานยังทำต่อบนเซิร์ฟเวอร์)
+  const cancelledRef = useRef(false);
 
   // ล้าง draft เก่าเมื่อเปลี่ยนไฟล์/ความยาว/โหมด (ผลตรวจเนื้อหาเดิมใช้ไม่ได้แล้ว)
   function discardDraft() {
@@ -76,6 +152,78 @@ export default function CreateCoursePage() {
   useEffect(() => {
     if (!hydrated) return;
     if (!token) router.replace("/login");
+  }, [hydrated, token, router]);
+
+  // ยกเลิกการติดตามสถานะเมื่อออกจากหน้านี้
+  useEffect(() => {
+    cancelledRef.current = false;
+    return () => {
+      cancelledRef.current = true;
+    };
+  }, []);
+
+  // กลับเข้าหน้านี้ระหว่างที่เกมยังสร้างอยู่ → ติดตามงานเดิมต่ออัตโนมัติ
+  useEffect(() => {
+    if (!hydrated || !token) return;
+    let disposed = false;
+
+    async function resume() {
+      const raw = localStorage.getItem(GENERATION_KEY);
+      if (!raw) return;
+      if (!/^\d+$/.test(raw)) {
+        localStorage.removeItem(GENERATION_KEY);
+        return;
+      }
+      const courseId = Number(raw);
+
+      let status: GenerationJob;
+      try {
+        status = await getGenerationStatus(courseId);
+      } catch (err) {
+        // เน็ตสะดุด (fetch ล้ม) → เก็บ key ไว้ให้รอบหน้าลองใหม่
+        // HTTP error (เช่น คอร์สถูกลบไปแล้ว) → ล้าง key ทิ้ง
+        if (!(err instanceof TypeError)) localStorage.removeItem(GENERATION_KEY);
+        return;
+      }
+      if (disposed) return;
+
+      if (status.status === "ready") {
+        localStorage.removeItem(GENERATION_KEY);
+        setResumeReadyCourseId(courseId);
+        return;
+      }
+      if (status.status !== "queued" && status.status !== "running") {
+        localStorage.removeItem(GENERATION_KEY);
+        if (status.status === "error") setError(status.error || "งานสร้างเกมก่อนหน้าล้มเหลว");
+        else if (status.status === "idle") setError("งานสร้างเกมหยุดกลางทาง กรุณากดสร้างอีกครั้ง");
+        return;
+      }
+
+      setJob(status);
+      setBusy(true);
+
+      const result = await waitForGeneration(courseId, () => disposed, setJob);
+      if (disposed) return;
+
+      if (result.job?.status === "ready") {
+        localStorage.removeItem(GENERATION_KEY);
+        setDraftCourseId(null);
+        router.push(`/courses/${courseId}/preview`);
+        return;
+      }
+
+      setError(
+        result.timedOut
+          ? "ใช้เวลานานกว่าที่กำหนด ระบบอาจยังทำงานอยู่ — กลับมาเปิดหน้านี้ใหม่เพื่อติดตามต่อ"
+          : result.pollError ?? result.job?.error ?? "สร้างเกมไม่สำเร็จ"
+      );
+      setBusy(false);
+    }
+
+    void resume();
+    return () => {
+      disposed = true;
+    };
   }, [hydrated, token, router]);
 
   const titleFromFileName = useMemo(
@@ -110,7 +258,6 @@ export default function CreateCoursePage() {
       setError(null);
       setSufficiencyLoading(true);
       setSufficiency(null);
-      setStep(1);
 
       // ถ้ามี draft เก่าจากการกดตรวจรอบก่อน ให้ลบทิ้งก่อน (กันคอร์สซ้ำ)
       if (draftCourseId) {
@@ -144,7 +291,6 @@ export default function CreateCoursePage() {
       setSufficiency(suff);
     } catch (err) {
       setError(err instanceof Error ? err.message : "ตรวจสอบเนื้อหาไม่สำเร็จ");
-      setStep(0);
     } finally {
       setSufficiencyLoading(false);
     }
@@ -153,11 +299,14 @@ export default function CreateCoursePage() {
   async function handleGenerate() {
     if (!file) return setError("กรุณาใส่ไฟล์บทเรียนก่อน");
     if (!sufficiency) return setError("กรุณาตรวจสอบเนื้อหาก่อนสร้างเกม");
+    if (busy) return;
+
+    cancelledRef.current = false;
 
     try {
-      setStep(2);
       setBusy(true);
       setError(null);
+      setJob(null);
 
       // ใช้คอร์ส draft ที่สร้างตอนตรวจเนื้อหา (ถ้ายังมี) — ไม่สร้างซ้ำ
       let courseId = draftCourseId;
@@ -178,18 +327,44 @@ export default function CreateCoursePage() {
         await uploadDocument(course.id, file);
       }
 
-      await generateGame(courseId, {
+      // จำคอร์สไว้ก่อนเริ่มงาน — ถ้าปิดหน้านี้ระหว่างสร้าง จะกลับมาติดตามต่อได้
+      localStorage.setItem(GENERATION_KEY, String(courseId));
+
+      const started = await startGeneration(courseId, {
         gameLength,
         questionTypes,
       });
+      setJob(started.job);
 
-      setDraftCourseId(null);
-      router.push(`/courses/${courseId}/preview`);
+      const result = await waitForGeneration(courseId, () => cancelledRef.current, setJob);
+      if (result.cancelled) return; // ออกจากหน้าแล้ว — งานยังทำต่อบนเซิร์ฟเวอร์
+
+      if (result.job?.status === "ready") {
+        localStorage.removeItem(GENERATION_KEY);
+        setDraftCourseId(null);
+        router.push(`/courses/${courseId}/preview`);
+        return;
+      }
+
+      setError(
+        result.timedOut
+          ? "ใช้เวลานานกว่าที่กำหนด ระบบอาจยังทำงานอยู่ — กดติดตามอีกครั้งหรือกลับมาเปิดหน้านี้ใหม่"
+          : result.pollError ?? result.job?.error ?? "สร้างเกมไม่สำเร็จ"
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "สร้างเกมไม่สำเร็จ");
-      setStep(0);
+      setJob((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: "error",
+              step: "error",
+              message: "สร้างเกมไม่สำเร็จ",
+            }
+          : prev
+      );
     } finally {
-      setBusy(false);
+      if (!cancelledRef.current) setBusy(false);
     }
   }
 
@@ -204,6 +379,9 @@ export default function CreateCoursePage() {
   }
 
   const canGenerate = Boolean(sufficiency?.sufficient) || (sufficiency?.level === "borderline");
+  // ตำแหน่งขั้นตอนปัจจุบันใน checklist (queued = ยังไม่เริ่ม)
+  const jobStepIndex = job ? GENERATION_STEPS.findIndex((s) => s.id === job.step) : -1;
+  const displayProgress = job?.progress ?? 0;
 
   return (
     <div className="flex min-h-screen flex-col bg-slate-950 text-slate-100">
@@ -263,8 +441,9 @@ export default function CreateCoursePage() {
                       <button
                         key={m.id}
                         type="button"
+                        disabled={busy}
                         onClick={() => toggleMode(m.id)}
-                        className={`rounded-lg border-2 p-3 text-left transition-all ${
+                        className={`rounded-lg border-2 p-3 text-left transition-all disabled:cursor-not-allowed disabled:opacity-60 ${
                           on
                             ? "border-emerald-500 bg-emerald-950/25 shadow-md shadow-emerald-950/30"
                             : "border-slate-700 bg-slate-950 hover:border-slate-500"
@@ -300,11 +479,12 @@ export default function CreateCoursePage() {
                       <button
                         key={l.id}
                         type="button"
+                        disabled={busy}
                         onClick={() => {
                           if (l.id !== gameLength && draftCourseId) discardDraft();
                           setGameLength(l.id);
                         }}
-                        className={`rounded-lg border-2 p-3 text-left transition-all ${
+                        className={`rounded-lg border-2 p-3 text-left transition-all disabled:cursor-not-allowed disabled:opacity-60 ${
                           active
                             ? "border-emerald-500 bg-emerald-950/30 shadow-md shadow-emerald-950/30"
                             : "border-slate-700 bg-slate-950 hover:border-slate-500"
@@ -337,8 +517,9 @@ export default function CreateCoursePage() {
                       <button
                         key={qt.id}
                         type="button"
+                        disabled={busy}
                         onClick={() => toggleQuestionType(qt.id)}
-                        className={`rounded-lg border-2 p-3 text-left transition-all ${
+                        className={`rounded-lg border-2 p-3 text-left transition-all disabled:cursor-not-allowed disabled:opacity-60 ${
                           on
                             ? "border-emerald-500 bg-emerald-950/25 shadow-md shadow-emerald-950/30"
                             : "border-slate-700 bg-slate-950 hover:border-slate-500"
@@ -435,34 +616,88 @@ export default function CreateCoursePage() {
             </section>
           )}
 
+          {resumeReadyCourseId !== null && (
+            <div className="rounded-xl border border-emerald-700/60 bg-emerald-950/30 p-4 text-sm text-emerald-200">
+              <p className="font-bold">✅ เกมที่สร้างค้างไว้เสร็จแล้ว</p>
+              <button
+                type="button"
+                onClick={() => router.push(`/courses/${resumeReadyCourseId}/preview`)}
+                className="mt-2 rounded-lg bg-emerald-600 px-4 py-2 font-bold text-white transition hover:bg-emerald-500"
+              >
+                ดูตัวอย่างเกม →
+              </button>
+            </div>
+          )}
+
           {error && (
             <div className="rounded-xl border border-rose-900/50 bg-rose-950/40 p-4 text-sm text-rose-300">
               ⚠️ {error}
             </div>
           )}
 
-          {/* Progress */}
+          {/* Progress — สถานะจริงจาก backend (poll ทุก 1.5 วินาที) */}
           {busy && (
-            <div className="rounded-xl border border-indigo-900/50 bg-indigo-950/30 p-5 text-sm">
-              <p className="mb-2 font-bold text-indigo-300">✨ AI กำลังสร้างเกม...</p>
-              <div className="space-y-1.5 text-slate-300">
-                <p>📄 อ่านบทเรียน (OCR ถ้าเป็นไฟล์สแกน)</p>
-                <p className="animate-pulse">🌍 ออกแบบโลก ตัวละคร ศัตรู บอส...</p>
-                <p className="animate-pulse">❓ สร้างคำถามหลายประเภทจากเนื้อหาจริง...</p>
+            <section className="rounded-2xl border-2 border-indigo-500/40 bg-slate-900/80 p-5">
+              <div className="flex items-center justify-between gap-3">
+                <p className="font-bold text-indigo-300">✨ {job?.message || "กำลังสร้างเกม..."}</p>
+                <span className="shrink-0 text-lg font-black tabular-nums text-indigo-200">
+                  {displayProgress}%
+                </span>
               </div>
-              <p className="mt-2 text-xs text-slate-500">ใช้เวลาประมาณ 15-90 วินาที กรุณารอสักครู่</p>
-            </div>
+
+              <div
+                className="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-slate-800"
+                role="progressbar"
+                aria-valuenow={displayProgress}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-label="ความคืบหน้าการสร้างเกม"
+              >
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-indigo-500 via-violet-500 to-fuchsia-500 transition-all duration-500"
+                  style={{ width: `${displayProgress}%` }}
+                />
+              </div>
+
+              <ol className="mt-4 space-y-1.5 text-sm">
+                {GENERATION_STEPS.map((s, i) => {
+                  const done = job?.status === "ready" || jobStepIndex > i;
+                  const active = !done && jobStepIndex === i;
+                  return (
+                    <li
+                      key={s.id}
+                      className={
+                        done
+                          ? "text-emerald-300"
+                          : active
+                            ? "font-semibold text-indigo-200"
+                            : "text-slate-500"
+                      }
+                    >
+                      <span className="mr-2 inline-block w-5 text-center">
+                        {done ? "✅" : active ? "⏳" : "⬜"}
+                      </span>
+                      {s.label}
+                    </li>
+                  );
+                })}
+              </ol>
+
+              <p className="mt-3 text-xs text-slate-500">
+                ใช้เวลาประมาณ 15–90 วินาที ปิดหน้านี้ได้ ระบบจะสร้างต่อให้แล้วกลับมาตรวจสอบได้
+              </p>
+            </section>
           )}
 
-          {!error && !busy && step < 2 && sufficiency && canGenerate && (
+          {sufficiency && canGenerate && !busy && (
             <button
               onClick={handleGenerate}
               className="w-full rounded-2xl bg-gradient-to-r from-indigo-600 via-violet-600 to-fuchsia-600 py-4 text-xl font-black tracking-wide shadow-xl shadow-violet-950/40 transition-all hover:scale-[1.01]"
             >
-              ✨ สร้างเกมด้วย AI เลย!
+              {error ? "🔁 ลองสร้างอีกครั้ง" : "✨ สร้างเกมด้วย AI เลย!"}
             </button>
           )}
-          {!error && !busy && step < 2 && sufficiency && !canGenerate && (
+          {sufficiency && !canGenerate && !busy && (
             <button
               disabled
               className="w-full rounded-2xl bg-slate-800 py-4 text-xl font-black tracking-wide text-slate-500 cursor-not-allowed"
