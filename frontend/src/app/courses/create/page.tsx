@@ -146,6 +146,8 @@ export default function CreateCoursePage() {
   const [job, setJob] = useState<GenerationJob | null>(null);
   // คอร์สที่กำลังติดตามอยู่ — ใช้ทำปุ่ม "ติดตามสถานะอีกครั้ง"
   const [pendingCourseId, setPendingCourseId] = useState<number | null>(null);
+  // true = ยังติดตามต่อได้ (เน็ตหลุด/หมดเวลา) — ถ้างานล้มจริงไม่ต้องโชว์ปุ่มนี้
+  const [canResumeTracking, setCanResumeTracking] = useState(false);
   const [resumeReadyCourseId, setResumeReadyCourseId] = useState<number | null>(null);
   // true = ผู้ใช้ออกจากหน้าแล้ว → หยุด poll (งานยังทำต่อบนเซิร์ฟเวอร์)
   const cancelledRef = useRef(false);
@@ -204,11 +206,11 @@ export default function CreateCoursePage() {
       }
       if (status.status !== "queued" && status.status !== "running") {
         localStorage.removeItem(GENERATION_KEY);
+        setCanResumeTracking(false);
         if (status.status === "error") setError(status.error || "งานสร้างเกมก่อนหน้าล้มเหลว");
         else if (status.status === "idle") setError("งานสร้างเกมหยุดกลางทาง กรุณากดสร้างอีกครั้ง");
         return;
       }
-
       setJob(status);
       setBusy(true);
       setPendingCourseId(courseId);
@@ -220,6 +222,7 @@ export default function CreateCoursePage() {
         localStorage.removeItem(GENERATION_KEY);
         setDraftCourseId(null);
         setPendingCourseId(null);
+        setCanResumeTracking(false);
         router.push(`/courses/${courseId}/preview`);
         return;
       }
@@ -227,11 +230,14 @@ export default function CreateCoursePage() {
       if (result.job?.status === "idle") {
         localStorage.removeItem(GENERATION_KEY);
         setPendingCourseId(null);
+        setCanResumeTracking(false);
         setError("งานสร้างเกมหยุดกลางทาง กรุณากดสร้างอีกครั้ง");
         setBusy(false);
         return;
       }
 
+      // เน็ตหลุด/หมดเวลา = ยังติดตามต่อได้; งานล้มจริง = ไม่ต้องโชว์ปุ่มติดตาม
+      setCanResumeTracking(Boolean(result.timedOut || result.pollError));
       setError(
         result.timedOut
           ? "ใช้เวลานานกว่าที่กำหนด ระบบอาจยังทำงานอยู่ — กด “ติดตามสถานะอีกครั้ง” หรือกลับมาเปิดหน้านี้ใหม่"
@@ -327,6 +333,7 @@ export default function CreateCoursePage() {
       localStorage.removeItem(GENERATION_KEY);
       setDraftCourseId(null);
       setPendingCourseId(null);
+      setCanResumeTracking(false);
       router.push(`/courses/${courseId}/preview`);
       return;
     }
@@ -335,10 +342,13 @@ export default function CreateCoursePage() {
       // ไม่มีงานในระบบแล้วจริง ๆ — ให้เริ่มใหม่
       localStorage.removeItem(GENERATION_KEY);
       setPendingCourseId(null);
+      setCanResumeTracking(false);
       setError("งานสร้างเกมหยุดกลางทาง กรุณากดสร้างอีกครั้ง");
       return;
     }
 
+    // เน็ตหลุด/หมดเวลา = ยังติดตามต่อได้; งานล้มจริง = ให้กดลองสร้างใหม่
+    setCanResumeTracking(Boolean(result.timedOut || result.pollError));
     setError(
       result.timedOut
         ? "ใช้เวลานานกว่าที่กำหนด ระบบอาจยังทำงานอยู่ — กด “ติดตามสถานะอีกครั้ง” หรือกลับมาเปิดหน้านี้ใหม่"
@@ -364,12 +374,14 @@ export default function CreateCoursePage() {
         localStorage.removeItem(GENERATION_KEY);
         setDraftCourseId(null);
         setPendingCourseId(null);
+        setCanResumeTracking(false);
         router.push(`/courses/${pendingCourseId}/preview`);
         return;
       }
       if (status.status !== "queued" && status.status !== "running") {
         localStorage.removeItem(GENERATION_KEY);
         setPendingCourseId(null);
+        setCanResumeTracking(false);
         setError(
           status.status === "error"
             ? status.error || "สร้างเกมไม่สำเร็จ"
@@ -401,6 +413,7 @@ export default function CreateCoursePage() {
       setBusy(true);
       setError(null);
       setJob(null);
+      setCanResumeTracking(false);
 
       // ใช้คอร์ส draft ที่สร้างตอนตรวจเนื้อหา (ถ้ายังมี) — ไม่สร้างซ้ำ
       let courseId = draftCourseId;
@@ -666,7 +679,7 @@ export default function CreateCoursePage() {
                         AI ประเมินว่าสร้างคำถามได้สูงสุดประมาณ {sufficiency.estimated_questions} ข้อ
                         แนะนำความยาว: {sufficiency.recommended_length === "short" ? "สั้น" : sufficiency.recommended_length === "medium" ? "กลาง" : "ยาว"}
                       </p>
-                      {sufficiency.warnings.length > 0 && (
+                      {(sufficiency.warnings?.length ?? 0) > 0 && (
                         <div className="mt-2">
                           <p className="text-xs font-semibold text-amber-400 mb-1">⚠️ คำเตือน:</p>
                           <ul className="text-xs text-amber-200/90 list-disc list-inside space-y-1">
@@ -674,7 +687,7 @@ export default function CreateCoursePage() {
                           </ul>
                         </div>
                       )}
-                      {sufficiency.suggestions.length > 0 && (
+                      {(sufficiency.suggestions?.length ?? 0) > 0 && (
                         <div className="mt-2">
                           <p className="text-xs font-semibold text-emerald-400 mb-1">💡 คำแนะนำ:</p>
                           <ul className="text-xs text-emerald-200/90 list-disc list-inside space-y-1">
@@ -713,7 +726,7 @@ export default function CreateCoursePage() {
           {error && (
             <div className="rounded-xl border border-rose-900/50 bg-rose-950/40 p-4 text-sm text-rose-300">
               <p>⚠️ {error}</p>
-              {pendingCourseId !== null && !busy && (
+              {canResumeTracking && pendingCourseId !== null && !busy && (
                 <button
                   type="button"
                   onClick={handleResumeTracking}

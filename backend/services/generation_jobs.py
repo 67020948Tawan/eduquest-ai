@@ -121,6 +121,26 @@ def fail(course_id: int, message: str) -> Optional[GenerationJob]:
     return job
 
 
+def record_failure(course_id: int, message: str) -> GenerationJob:
+    """บันทึกงานที่ล้มเหลวทั้งที่ไม่มี job อยู่ในหน่วยความจำ
+
+    ใช้ตอน startup: คอร์สที่ค้าง GENERATING (โปรเซสรีสตาร์ท/รีดีพลอยระหว่างสร้าง)
+    จะได้มีสถานะ error พร้อมสาเหตุให้ frontend อ่าน แทนที่จะกลายเป็น "idle" เฉย ๆ
+    """
+    _prune()
+    job = _jobs.get(course_id)
+    if job is None:
+        job = GenerationJob(course_id=course_id)
+        _jobs[course_id] = job
+    job.status = "error"
+    job.step = "error"
+    job.message = "สร้างเกมไม่สำเร็จ"
+    job.error = message
+    job.finished_at = time.time()
+    job.updated_at = job.finished_at
+    return job
+
+
 def payload(job: GenerationJob) -> dict[str, Any]:
     return {
         "course_id": job.course_id,

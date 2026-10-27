@@ -45,6 +45,7 @@ async def _reset_stuck_generations() -> None:
     """งาน generate เก็บในหน่วยความจำ — หลังรีสตาร์ทให้คืนคอร์สที่ค้าง GENERATING เป็น DRAFT"""
     from sqlalchemy import select
     from models.course import Course, CourseStatus
+    from services import generation_jobs
 
     async with SessionLocal() as db:
         rows = await db.execute(select(Course).where(Course.status == CourseStatus.GENERATING))
@@ -54,6 +55,13 @@ async def _reset_stuck_generations() -> None:
         for course in stuck:
             course.status = CourseStatus.DRAFT
         await db.commit()
+        # เก็บสาเหตุไว้ให้ frontend อ่าน: งานหายเพราะโปรเซสถูก restart (เช่น ตอน deploy)
+        for course in stuck:
+            generation_jobs.record_failure(
+                course.id,
+                "เซิร์ฟเวอร์รีสตาร์ทระหว่างสร้างเกม (เช่น มีการอัปเดตระบบ) — "
+                "ไฟล์บทเรียนยังอยู่ กด “ลองสร้างอีกครั้ง” ได้เลย",
+            )
         print(f"♻️ Reset {len(stuck)} stuck GENERATING course(s) to DRAFT")
 
 
