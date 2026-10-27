@@ -15,6 +15,9 @@ import json
 import random
 import traceback
 from collections import Counter
+from typing import Any, Optional
+
+from pydantic import ValidationError
 
 from schemas.generation import CourseGenerationAI, ContentSufficiencyAI, QuizQuestionAI
 from services.ai_provider import get_ai_provider, AIProviderError
@@ -202,6 +205,195 @@ def _build_supplement_question(data: dict, expected_type: str) -> QuizQuestionAI
     except Exception as exc:
         print(f"⚠️ [GameDirector] Invalid supplementary question: {exc}")
         return None
+
+
+_QUESTION_TYPE_ALIASES = {
+    "mcq": "multiple_choice",
+    "multiple-choice": "multiple_choice",
+    "multiplechoice": "multiple_choice",
+    "choice": "multiple_choice",
+    "tf": "true_false",
+    "true/false": "true_false",
+    "truefalse": "true_false",
+    "boolean": "true_false",
+    "match": "matching",
+    "matching_pairs": "matching",
+    "pair": "matching",
+    "order": "ordering",
+    "sorting": "ordering",
+    "sequence": "ordering",
+    "arrange": "ordering",
+}
+_VALID_QUESTION_TYPES = {"multiple_choice", "true_false", "matching", "ordering"}
+_MAX_OPTIONS = 6
+
+
+def _clean_text_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for item in value:
+        if isinstance(item, str):
+            text = item.strip()
+        elif isinstance(item, (int, float)):
+            text = str(item).strip()
+        else:
+            text = ""
+        if text:
+            out.append(text)
+    return out
+
+
+def _normalize_question(raw: Any) -> Optional[dict]:
+    """ซ่อมคำถามที่ AI ส่งมาให้ผ่าน schema ได้
+
+    ปัญหาที่เจอบ่อย (ทำให้ทั้งงานล้มด้วย Pydantic ValidationError):
+      - matching/ordering ใส่ options เป็นคำใบ้คำเดียว เช่น ["จับคู่"], ["เรียงลำดับ"]
+        → เติม options จาก matching_pairs / ordering_items จริง (ตัวเล่นใช้สองฟิลด์นั้นอยู่แล้ว)
+      - correct_answer_index หลุดช่วง / ชี้ option ที่ไม่มี
+      - ลืม field ที่ schema บังคับ (explanation, source_reference)
+    คืน None เมื่อซ่อมไม่ได้ เพื่อให้ coverage เติมคำถามประเภทนั้นกลับให้ภายหลัง
+    """
+    if not isinstance(raw, dict):
+        return None
+
+    q = dict(raw)
+
+    qtype = str(q.get("question_type") or "multiple_choice").strip().lower()
+    qtype = _QUESTION_TYPE_ALIASES.get(qtype, qtype)
+    if qtype not in _VALID_QUESTION_TYPES:
+        qtype = "multiple_choice"
+    q["question_type"] = qtype
+
+    question_text = str(q.get("question") or "").strip()
+    if not question_text:
+        return None
+    q["question"] = question_text
+
+    # field บังคับที่ AI มักลืม
+    q.setdefault("explanation", "")
+    q.setdefault("source_reference", "")
+    if not isinstance(q.get("explanation"), str):
+        q["explanation"] = str(q.get("explanation") or "")
+    if not isinstance(q.get("source_reference"), str):
+        q["source_reference"] = str(q.get("source_reference") or "")
+
+    options = _clean_text_list(q.get("options"))
+
+    if qtype == "matching":
+        pairs = q.get("matching_pairs")
+        clean_pairs = [
+            {"left": str(p["left"]).strip(), "right": str(p["right"]).strip()}
+            for p in (pairs if isinstance(pairs, list) else [])
+            if isinstance(p, dict)
+            and str(p.get("left") or "").strip()
+            and str(p.get("right") or "").strip()
+        ]
+        lefts = list(dict.fromkeys(p["left"] for p in clean_pairs))
+        if len(lefts) < 2:
+            return None  # ซ่อมไม่ได้ — ปล่อยให้ coverage สร้าง matching ใหม่ให้
+        q["matching_pairs"] = clean_pairs
+        q["options"] = lefts[:_MAX_OPTIONS]
+        q["correct_data"] = {p["left"]: p["right"] for p in clean_pairs}
+        q["correct_answer_index"] = 0
+        return q
+
+    if qtype == "ordering":
+        items = list(dict.fromkeys(_clean_text_list(q.get("ordering_items")) or options))
+        if len(items) < 3:
+            return None  # เรียงลำดับต้องมีอย่างน้อย 3 ชิ้น
+        q["ordering_items"] = items
+        q["options"] = items[:_MAX_OPTIONS]
+        raw_order = q.get("correct_data")
+        if not (
+            isinstance(raw_order, list)
+            and len(raw_order) == len(items)
+            and sorted(raw_order) == list(range(len(items)))
+        ):
+            q["correct_data"] = list(range(len(items)))
+        q["correct_answer_index"] = 0
+        return q
+
+    if qtype == "true_false":
+        if len(options) < 2:
+            options = ["จริง", "เท็จ"]
+        q["options"] = options[:2]
+    else:  # multiple_choice
+        options = list(dict.fromkeys(options))
+        if len(options) < 2:
+            return None
+        q["options"] = options[:_MAX_OPTIONS]
+
+    idx = q.get("correct_answer_index")
+    if not isinstance(idx, int) or isinstance(idx, bool) or not (0 <= idx < len(q["options"])):
+        q["correct_answer_index"] = 0
+    return q
+
+
+def _fallback_question(chapter: dict) -> Optional[dict]:
+    """สร้างคำถามสำรองจากเนื้อหาบท เมื่อคำถามที่ AI ส่งมาซ่อมไม่ได้ทั้งหมด
+
+    ใช้ข้อความจริงจากบทเรียน (ไม่แต่งเนื้อหาใหม่) ทำเป็นข้อถูก/ผิด
+    เพื่อไม่ให้ทั้งงานล้มเพราะ schema บังคับทุกบทต้องมีคำถามอย่างน้อย 1 ข้อ
+    """
+    lesson = chapter.get("lesson") if isinstance(chapter.get("lesson"), dict) else {}
+    statement = str(lesson.get("content") or lesson.get("objective") or "").strip()
+    if not statement:
+        title = str(chapter.get("title") or "").strip()
+        statement = title
+    if not statement:
+        return None
+    statement = statement.split("\n")[0].strip()
+    if len(statement) > 180:
+        statement = statement[:180].rstrip() + "…"
+    return {
+        "question": f"ข้อความนี้ถูกหรือผิด: {statement}",
+        "options": ["จริง", "เท็จ"],
+        "correct_answer_index": 0,
+        "explanation": f"เนื้อหานี้มาจากบท “{chapter.get('title', '')}” ในเอกสารต้นฉบับ",
+        "difficulty": "easy",
+        "points": 50,
+        "source_reference": str(chapter.get("title") or ""),
+        "concept": None,
+        "question_type": "true_false",
+        "matching_pairs": None,
+        "ordering_items": None,
+        "correct_data": None,
+    }
+
+
+def _normalize_ai_payload(raw: Any) -> Any:
+    """normalize คำถามทุกข้อก่อน model_validate (กัน ValidationError ทำให้งานล้มทั้งใบ)"""
+    if not isinstance(raw, dict):
+        return raw
+
+    payload = dict(raw)
+    chapters = payload.get("chapters")
+    if not isinstance(chapters, list):
+        return payload
+
+    fixed_chapters: list[dict] = []
+    for chapter in chapters:
+        if not isinstance(chapter, dict):
+            continue
+        ch = dict(chapter)
+        questions = ch.get("quiz_questions")
+        normalized = [
+            nq
+            for nq in (_normalize_question(q) for q in (questions if isinstance(questions, list) else []))
+            if nq is not None
+        ]
+        if not normalized:
+            fallback = _fallback_question(ch)
+            if not fallback:
+                continue
+            print(f"⚠️ [GameDirector] บท '{ch.get('title')}' คำถามเสียทั้งหมด — ใช้คำถามสำรอง")
+            normalized = [fallback]
+        ch["quiz_questions"] = normalized
+        fixed_chapters.append(ch)
+
+    payload["chapters"] = fixed_chapters
+    return payload
 
 
 def _shuffle_ordering_questions(validated: CourseGenerationAI) -> None:
@@ -641,8 +833,10 @@ Visual Style ของเกม: {style_hint} (ใช้กำหนดโทน
 {qt_lines}
 - multiple_choice: เลือกข้อเดียวจากตัวเลือก 4 ข้อ (ต้องมี correct_answer_index)
 - true_false: จริง/เท็จ (options = ["จริง","เท็จ"] หรือ ["True","False"])
-- matching: จับคู่ (ต้องมี matching_pairs และ correct_data)
-- ordering: เรียงลำดับ (ต้องมี ordering_items และ correct_data)
+- matching: จับคู่ — ต้องมี matching_pairs (อย่างน้อย 2 คู่) และ correct_data
+  · options ต้องเป็นรายการฝั่งซ้ายจริง (อย่างน้อย 2 ข้อ) ห้ามใส่คำว่า "จับคู่" ใน options
+- ordering: เรียงลำดับ — ต้องมี ordering_items (อย่างน้อย 3 ชิ้น) และ correct_data
+  · options ต้องเป็นรายการที่ต้องเรียงจริง (อย่างน้อย 3 ข้อ) ห้ามใส่คำว่า "เรียงลำดับ" ใน options
 
 🌐 LANGUAGE RULE (สำคัญที่สุด — ผิดข้อนี้ถือว่าล้มเหลวทั้งงาน):
 - เอกสารต้นทางเป็นภาษา{language_rule} → คุณต้องสร้างทุก field เป็นภาษา{language_rule}เท่านั้น
@@ -659,8 +853,8 @@ Visual Style ของเกม: {style_hint} (ใช้กำหนดโทน
 2. ทุก zone ต้อง map กับ chapter (chapter_index 0-based), ทุก enemy/boss/quest ต้องมีรากจากเนื้อหาจริงในเอกสาร
 3. quiz_questions ต้องมี correct_answer_index ชี้ index ที่มีอยู่จริงใน options
 4. ใน string values ห้ามใช้ double quote (") ซ้อน — ใช้ single quote (') หรือ “ ” แทน
-5. สำหรับ matching: ให้กรอก matching_pairs (array ของ {{"left":"...","right":"..."}}) และ correct_data (map left_id → right_id)
-6. สำหรับ ordering: ให้กรอก ordering_items (array ของ items ในลำดับที่ AI สุ่ม) และ correct_data (array ของ indices ตามลำดับที่ถูกต้อง)
+5. สำหรับ matching: ให้กรอก matching_pairs (array ของ {{"left":"...","right":"..."}}) และ correct_data (map left→right) — options ต้องเป็นฝั่ง left อย่างน้อย 2 รายการ (ห้ามใส่ ["จับคู่"])
+6. สำหรับ ordering: ให้กรอก ordering_items (array ของ items ในลำดับที่ AI สุ่ม) และ correct_data (array ของ indices ตามลำดับที่ถูกต้อง) — options ต้องเป็น items อย่างน้อย 3 รายการ (ห้ามใส่ ["เรียงลำดับ"])
 7. บังคับ: อย่างน้อย {target_chapters} chapters · คำถาม chapter ละ {target_q_per_chapter} ข้อ (ห้ามน้อยกว่านี้) · ถ้าเอกสารสั้นให้แตกหัวข้อย่อย/ตัวอย่าง/แบบฝึกหัดให้ครบตามเป้า อย่ายุบรวม
 8. ต้องมีคำถามอย่างน้อย 1 ข้อของทุกประเภทที่ระบุไว้ข้างต้น (multiple_choice, true_false, matching, ordering ตามที่เลือก) — ห้ามสร้างแต่ multiple_choice/true_false
 9. ผสมประเภทคำถามให้หลากหลายในแต่ละบท ตามที่อนุญาตไว้ข้างต้น"""
@@ -705,9 +899,14 @@ Visual Style ของเกม: {style_hint} (ใช้กำหนดโทน
                     ),
                     user_prompt=user_prompt + extra,
                 )
-                candidate = CourseGenerationAI.model_validate(raw)
+                candidate = CourseGenerationAI.model_validate(_normalize_ai_payload(raw))
             except AIProviderError as e:
                 print(f"⚠️ [GameDirector] Attempt {i} failed: {e}")
+                continue
+            except ValidationError as e:
+                # AI ตอบโครงสร้างไม่ครบ (ซ่อมแล้วยังไม่ผ่าน) — ลองรอบถัดไปที่กระชับกว่า
+                print(f"⚠️ [GameDirector] Attempt {i} schema mismatch: {e.error_count()} error(s)")
+                print(f"   first: {e.errors()[0].get('loc')} {e.errors()[0].get('msg')}")
                 continue
 
             # Post-check: เนื้อหาต้องเป็นภาษาเดียวกับเอกสาร
@@ -760,6 +959,16 @@ Visual Style ของเกม: {style_hint} (ใช้กำหนดโทน
         result["game_length"] = game_length
         result["questions_per_chapter"] = target_q_per_chapter
         return result
+    except ValidationError as e:
+        # ซ่อมแล้วยังไม่ผ่าน (เช่น ไม่เหลือคำถามที่ใช้ได้เลย) — แจ้งแบบคนอ่านรู้เรื่อง
+        print(f"❌ [GameDirector] Payload invalid after normalization: {e.error_count()} error(s)")
+        traceback.print_exc()
+        return {
+            "error": (
+                "AI สร้างรูปแบบคำถามไม่ถูกต้อง (ตัวเลือก/เฉลยไม่ครบ) — "
+                "กรุณากด “ลองสร้างอีกครั้ง” หรือเปลี่ยนประเภทคำถามที่เลือก"
+            )
+        }
     except Exception as e:
         print("❌ [GameDirector] Generation failed — full traceback:")
         traceback.print_exc()
