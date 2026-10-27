@@ -72,7 +72,7 @@ export default function ProfilePage() {
                 { label: "XP รวม", value: progress.total_xp.toLocaleString(), icon: "⭐" },
                 { label: "ความแม่นยำ", value: `${progress.accuracy_percent}%`, icon: "🎯" },
                 { label: "ตอบถูก", value: `${progress.total_correct}/${progress.total_answers}`, icon: "✅" },
-                { label: "Streak", value: `${progress.current_streak} วัน`, icon: "🔥" },
+                { label: "เรียนต่อเนื่อง", value: `${progress.current_streak} วัน`, icon: "🔥" },
               ].map((card) => (
                 <div key={card.label} className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
                   <p className="text-sm text-slate-400">
@@ -109,9 +109,9 @@ export default function ProfilePage() {
 
             <div className="mt-6 grid gap-6 lg:grid-cols-2">
               <section className="rounded-2xl border border-slate-800 bg-slate-900/50 p-6">
-                <h2 className="font-bold text-slate-200">🏅 Badges ({progress.badges.length})</h2>
+                <h2 className="font-bold text-slate-200">🏅 เหรียญตรา ({progress.badges.length})</h2>
                 {progress.badges.length === 0 ? (
-                  <p className="mt-3 text-sm text-slate-500">ยังไม่มี badges — เรียนให้จบเพื่อปลดล็อก!</p>
+                  <p className="mt-3 text-sm text-slate-500">ยังไม่มีเหรียญตรา — เรียนให้จบเพื่อปลดล็อก!</p>
                 ) : (
                   <div className="mt-4 grid gap-2">
                     {progress.badges.map((badge) => (
@@ -149,7 +149,7 @@ export default function ProfilePage() {
                           </span>
                         </div>
                         <p className="mt-1 text-[11px] text-slate-500">
-                          {session.chapters_completed} chapters · ตอบถูก {session.questions_correct}/
+                          {session.chapters_completed} บท · ตอบถูก {session.questions_correct}/
                           {session.questions_answered}
                         </p>
                       </Link>

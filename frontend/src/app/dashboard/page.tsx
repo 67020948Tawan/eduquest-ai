@@ -5,7 +5,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import SiteHeader from "@/components/SiteHeader";
 import ShareModal from "@/components/ShareModal";
-import { useAuthToken } from "@/lib/useAuthToken";
+import { useAuthToken, useHydrated } from "@/lib/useAuthToken";
+import { gameModeLabel, statusMeta, visualStyleLabel } from "@/lib/labels";
 import {
   listCourses,
   deleteCourse,
@@ -15,22 +16,16 @@ import {
   type CourseSummary,
 } from "@/lib/api";
 
-const STATUS_STYLE: Record<string, { label: string; className: string }> = {
-  DRAFT: { label: "📝 Draft", className: "bg-slate-800 text-slate-300" },
-  GENERATING: { label: "⏳ Generating", className: "bg-amber-950/60 text-amber-300" },
-  READY: { label: "✅ Ready", className: "bg-emerald-950/60 text-emerald-300" },
-  PUBLISHED: { label: "🚀 Live", className: "bg-indigo-950/60 text-indigo-300" },
-  ARCHIVED: { label: "📦 Archived", className: "bg-slate-900 text-slate-500" },
-};
-
 export default function DashboardPage() {
   const router = useRouter();
   const token = useAuthToken();
+  const hydrated = useHydrated();
   const [courses, setCourses] = useState<CourseSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [archivingId, setArchivingId] = useState<number | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   // Publish / Share
   const [publishingId, setPublishingId] = useState<number | null>(null);
@@ -45,17 +40,26 @@ export default function DashboardPage() {
     window.setTimeout(() => setToast(null), 2600);
   }
 
-  useEffect(() => {
-    if (token === null) return;
-    listCourses()
-      .then(setCourses)
-      .catch((err) => setError(err instanceof Error ? err.message : "โหลดข้อมูลไม่สำเร็จ"))
-      .finally(() => setLoading(false));
-  }, [token]);
+  function retryLoad() {
+    setLoading(true);
+    setError(null);
+    setReloadKey((key) => key + 1);
+  }
 
   useEffect(() => {
-    if (token === null) router.replace("/login");
-  }, [token, router]);
+    if (!hydrated) return;
+    if (!token) {
+      router.replace("/login");
+      return;
+    }
+    listCourses()
+      .then((list) => {
+        setCourses(list);
+        setError(null);
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : "โหลดข้อมูลไม่สำเร็จ"))
+      .finally(() => setLoading(false));
+  }, [hydrated, token, reloadKey, router]);
 
   async function handleDelete(e: React.MouseEvent, courseId: number, title: string) {
     e.preventDefault();
@@ -104,14 +108,14 @@ export default function DashboardPage() {
       setShareTitle(course.title);
       notify("🎉 เผยแพร่เกมสำเร็จ!", true);
     } catch (err) {
-      notify(err instanceof Error ? err.message : "Publish ไม่สำเร็จ", false);
+      notify(err instanceof Error ? err.message : "เผยแพร่ไม่สำเร็จ", false);
     } finally {
       setBusy(false);
       setPublishingId(null);
     }
   }
 
-  if (token === null) {
+  if (!hydrated || token === null) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-400">
         กำลังตรวจสอบการเข้าสู่ระบบ...
@@ -139,13 +143,13 @@ export default function DashboardPage() {
       <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-10">
         {/* Welcome */}
         <div className="mb-8">
-          <h1 className="text-3xl font-bold">Welcome back 👋</h1>
-          <p className="mt-1 text-slate-400">Create something amazing today.</p>
+          <h1 className="text-3xl font-bold">ยินดีต้อนรับกลับ 👋</h1>
+          <p className="mt-1 text-slate-400">เปลี่ยนบทเรียนของคุณให้เป็นเกมที่ผู้เรียนอยากเล่น</p>
           <Link
             href="/courses/create"
             className="mt-4 inline-block rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-6 py-3 font-semibold shadow-lg shadow-indigo-950/50 transition hover:from-indigo-500 hover:to-violet-500"
           >
-            + Create Game
+            + สร้างเกมใหม่
           </Link>
         </div>
 
@@ -156,25 +160,37 @@ export default function DashboardPage() {
             ))}
           </div>
         ) : error ? (
-          <div className="rounded-xl border border-rose-900/50 bg-rose-950/30 p-6 text-rose-300">{error}</div>
+          <div className="rounded-2xl border border-rose-900/50 bg-rose-950/30 p-6">
+            <p className="font-semibold text-rose-200">โหลดรายการเกมไม่สำเร็จ</p>
+            <p className="mt-1 text-sm text-rose-300/80">{error}</p>
+            <p className="mt-2 text-xs text-rose-300/60">
+              เซิร์ฟเวอร์อาจกำลังตื่นอยู่ ลองอีกครั้งได้เลย
+            </p>
+            <button
+              onClick={retryLoad}
+              className="mt-4 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-2 text-sm font-semibold text-rose-200 transition hover:border-rose-400/50 hover:bg-rose-500/20"
+            >
+              ลองอีกครั้ง
+            </button>
+          </div>
         ) : courses.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-slate-700 p-16 text-center">
             <p className="text-5xl">🎮</p>
-            <h2 className="mt-4 text-xl font-bold">No games yet</h2>
+            <h2 className="mt-4 text-xl font-bold">ยังไม่มีเกม</h2>
             <p className="mx-auto mt-2 max-w-sm text-sm text-slate-400">
-              Turn your first lesson into an interactive game.
+              อัปโหลดบทเรียนแรก แล้วให้ AI ช่วยสร้างเกมให้ผู้เรียน
             </p>
             <Link
               href="/courses/create"
               className="mt-6 inline-block rounded-xl bg-indigo-600 px-6 py-3 font-semibold transition hover:bg-indigo-500"
             >
-              ✨ Create Game
+              ✨ สร้างเกมแรก
             </Link>
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
             {courses.map((course) => {
-              const st = STATUS_STYLE[course.status] ?? STATUS_STYLE.DRAFT;
+              const st = statusMeta(course.status);
               const published = course.status === "PUBLISHED";
               return (
                 <div
@@ -186,7 +202,7 @@ export default function DashboardPage() {
                     disabled={deletingId === course.id}
                     title="ลบคอร์สนี้"
                     aria-label={`ลบคอร์ส ${course.title}`}
-                    className="absolute right-3 top-3 rounded-lg p-1.5 text-slate-600 opacity-0 transition hover:bg-rose-950 hover:text-rose-400 group-hover:opacity-100 disabled:opacity-50"
+                    className="absolute right-2 top-2 grid h-10 w-10 place-items-center rounded-lg text-slate-500 transition hover:bg-rose-950 hover:text-rose-300 focus-visible:bg-rose-950 focus-visible:text-rose-300 disabled:opacity-50"
                   >
                     {deletingId === course.id ? "..." : "🗑"}
                   </button>
@@ -196,7 +212,7 @@ export default function DashboardPage() {
                   </span>
 
                   <Link href={`/courses/${course.id}/preview`} className="mt-3 block">
-                    <h2 className="line-clamp-1 pr-8 text-lg font-bold group-hover:text-indigo-300">{course.title}</h2>
+                    <h2 className="line-clamp-1 pr-10 text-lg font-bold group-hover:text-indigo-300">{course.title}</h2>
                   </Link>
                   <p className="mt-1 line-clamp-2 flex-1 text-sm text-slate-400">
                     {course.description || "ไม่มีคำอธิบาย"}
@@ -205,33 +221,33 @@ export default function DashboardPage() {
                   <div className="mt-3 flex flex-wrap gap-1.5">
                     {(course.game_modes ?? []).slice(0, 3).map((m) => (
                       <span key={m} className="rounded-full bg-slate-800 px-2.5 py-0.5 text-[11px] text-slate-300">
-                        {m.replace("_", " ")}
+                        {gameModeLabel(m)}
                       </span>
                     ))}
                     <span className="rounded-full bg-slate-800 px-2.5 py-0.5 text-[11px] text-slate-300">
-                      🎨 {course.visual_style.replace("_", " ")}
+                      🎨 {visualStyleLabel(course.visual_style)}
                     </span>
                   </div>
 
                   {/* Actions */}
-                  <div className="mt-4 grid grid-cols-3 gap-2">
+                  <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3">
                     <Link
                       href={`/courses/${course.id}/preview`}
                       className="rounded-lg bg-slate-800 py-2 text-center text-xs font-bold text-slate-200 transition hover:bg-slate-700"
                     >
-                      ▶ Open
+                      ▶ เปิดเล่น
                     </Link>
                     <Link
                       href={`/courses/${course.id}/edit`}
                       className="rounded-lg bg-slate-800 py-2 text-center text-xs font-bold text-slate-200 transition hover:bg-slate-700"
                     >
-                      ✏️ Edit
+                      ✏️ แก้ไข
                     </Link>
                     <Link
                       href={`/courses/${course.id}/report`}
                       className="rounded-lg bg-slate-800 py-2 text-center text-xs font-bold text-slate-200 transition hover:bg-slate-700"
                     >
-                      📊 Report
+                      📊 รายงาน
                     </Link>
                     {published ? (
                       <button
@@ -242,7 +258,7 @@ export default function DashboardPage() {
                         disabled={busy}
                         className="rounded-lg bg-gradient-to-r from-fuchsia-600 to-pink-600 py-2 text-xs font-bold text-white transition hover:from-fuchsia-500 disabled:opacity-50"
                       >
-                        🔗 Share
+                        🔗 แชร์
                       </button>
                     ) : course.status === "READY" || course.status === "DRAFT" ? (
                       <button
@@ -250,7 +266,7 @@ export default function DashboardPage() {
                         disabled={busy || publishingId === course.id}
                         className="rounded-lg bg-emerald-600 py-2 text-xs font-bold text-white transition hover:bg-emerald-500 disabled:opacity-50"
                       >
-                        {publishingId === course.id ? "..." : "🌐 Publish"}
+                        {publishingId === course.id ? "..." : "🌐 เผยแพร่"}
                       </button>
                     ) : (
                       <span />
@@ -263,14 +279,14 @@ export default function DashboardPage() {
                       {archivingId === course.id
                         ? "..."
                         : course.status === "ARCHIVED"
-                          ? "♻️ Restore"
-                          : "📦 Archive"}
+                          ? "♻️ กู้คืน"
+                          : "📦 เก็บถาวร"}
                     </button>
                     <Link
                       href={`/courses/${course.id}/leaderboard`}
                       className="rounded-lg border border-slate-700 py-2 text-center text-xs font-bold text-slate-300 transition hover:border-slate-500 hover:text-white"
                     >
-                      🏆 Board
+                      🏆 อันดับ
                     </Link>
                   </div>
                 </div>
@@ -302,7 +318,7 @@ export default function DashboardPage() {
       setShareCode(res.share_code ?? null);
       setShareTitle(course.title);
     } catch (err) {
-      notify(err instanceof Error ? err.message : "Share ไม่สำเร็จ", false);
+      notify(err instanceof Error ? err.message : "แชร์ไม่สำเร็จ", false);
     } finally {
       setBusy(false);
     }

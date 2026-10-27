@@ -73,7 +73,7 @@ export default function CourseReportPage() {
             </Link>
             <h1 className="mt-2 text-3xl font-bold">📊 รายงานผู้เรียน</h1>
             <p className="mt-1 text-sm text-slate-400">
-              {report?.course_title ?? "กำลังโหลด..."} · {report?.total_chapters ?? 0} chapters
+              {report?.course_title ?? "กำลังโหลด..."} · {report?.total_chapters ?? 0} บท
             </p>
           </div>
           <button
@@ -81,7 +81,7 @@ export default function CourseReportPage() {
             disabled={!report}
             className="rounded-xl border border-emerald-700/60 bg-emerald-950/40 px-4 py-2 text-sm font-semibold text-emerald-300 transition hover:bg-emerald-900/40 disabled:opacity-50"
           >
-            ⬇️ Export CSV
+            ⬇️ ส่งออก CSV
           </button>
         </div>
 
@@ -119,10 +119,10 @@ export default function CourseReportPage() {
                       <th className="px-4 py-3">#</th>
                       <th className="px-4 py-3">ชื่อ</th>
                       <th className="px-4 py-3 text-right">คะแนนที่ดีที่สุด</th>
-                      <th className="px-4 py-3 text-right">Chapter</th>
+                      <th className="px-4 py-3 text-right">บทที่ผ่าน</th>
                       <th className="px-4 py-3 text-right">ความแม่นยำ</th>
                       <th className="px-4 py-3 text-right">ความคืบหน้า</th>
-                      <th className="px-4 py-3 text-right">Badges</th>
+                      <th className="px-4 py-3 text-right">เหรียญตรา</th>
                       <th className="px-4 py-3 text-right">รอบที่เล่น</th>
                     </tr>
                   </thead>

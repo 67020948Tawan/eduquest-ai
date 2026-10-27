@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import SiteHeader from "@/components/SiteHeader";
-import { useAuthToken } from "@/lib/useAuthToken";
+import { useAuthToken, useHydrated } from "@/lib/useAuthToken";
 import {
   createCourse,
   deleteCourse,
@@ -44,6 +44,7 @@ const QUESTION_TYPE_OPTIONS: { id: QuestionType; title: string; desc: string }[]
 export default function CreateCoursePage() {
   const router = useRouter();
   const token = useAuthToken();
+  const hydrated = useHydrated();
 
   const [file, setFile] = useState<File | null>(null);
   const [modes, setModes] = useState<string[]>(["rpg_lore"]);
@@ -73,8 +74,9 @@ export default function CreateCoursePage() {
   }
 
   useEffect(() => {
-    if (token === null) router.replace("/login");
-  }, [token, router]);
+    if (!hydrated) return;
+    if (!token) router.replace("/login");
+  }, [hydrated, token, router]);
 
   const titleFromFileName = useMemo(
     () => (file ? file.name.replace(/\.[^.]+$/, "") : ""),
@@ -193,7 +195,7 @@ export default function CreateCoursePage() {
 
   const totalQuestions = lengthCfg.chapters * lengthCfg.qpc;
 
-  if (token === null) {
+  if (!hydrated || token === null) {
     return (
       <div className="grid min-h-screen place-items-center bg-slate-950 text-slate-400">
         กำลังตรวจสอบการเข้าสู่ระบบ...

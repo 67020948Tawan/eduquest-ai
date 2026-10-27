@@ -1247,42 +1247,6 @@ export function AnimatedPixelSprite({
 }
 
 /* ============================================================================ */
-/*  PixelXPBar — แถบ XP เคลื่อนไหวพร้อมเลเวล                                */
-/* ============================================================================ */
-
-interface PixelXPBarProps {
-  currentXP: number;
-  nextLevelXP: number;
-  level: number;
-  width?: number;
-  className?: string;
-}
-
-export function PixelXPBar({
-  currentXP,
-  nextLevelXP,
-  level,
-  width = 200,
-  className = "",
-}: PixelXPBarProps) {
-  const pct = Math.max(0, Math.min(100, Math.round((currentXP / nextLevelXP) * 100)));
-  return (
-    <div className={`w-full ${className}`} style={{ width }}>
-      <div className="flex justify-between mb-1 text-xs font-bold text-slate-300">
-        <span>LEVEL {level}</span>
-        <span>{currentXP.toLocaleString()} / {nextLevelXP.toLocaleString()} XP</span>
-      </div>
-      <div className="h-3 w-full rounded-full bg-slate-800 border border-slate-600 overflow-hidden relative">
-        <div
-          className="h-full bg-gradient-to-r from-emerald-400 to-teal-400 eq-progress-shimmer transition-all duration-700 ease-out"
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-    </div>
-  );
-}
-
-/* ============================================================================ */
 /*  React import guard (ใช้ในคอมโพเนนต์ใหม่ด้านล่าง)                       */
 /* ============================================================================ */
 
