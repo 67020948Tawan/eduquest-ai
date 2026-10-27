@@ -57,7 +57,8 @@ const GENERATION_STEPS: { id: string; label: string }[] = [
 const GENERATION_KEY = "eduquest_generation_course";
 const POLL_INTERVAL_MS = 1500;
 const GENERATION_TIMEOUT_MS = 10 * 60 * 1000;
-const MAX_POLL_ERRORS = 5;
+// เน็ตหรือ Render อาจสะดุดตอน cold start — ยอมให้พลาดได้ประมาณ 1 นาที
+const POLL_ERROR_GRACE_MS = 60 * 1000;
 
 type WaitResult = {
   job: GenerationJob | null;
@@ -68,8 +69,8 @@ type WaitResult = {
 
 /**
  * poll สถานะงานสร้างเกมจนจบ
- * - ต้องอัปเดต UI ทุก 1.5 วินาที
- * - ทน network error ชั่วคราว (สูงสุด 5 ครั้งติดกัน)
+ * - อัปเดต UI ทุก 1.5 วินาที
+ * - ทน network error ชั่วคราวได้ถึง 60 วินาที (Render cold start / เน็ตสะดุด)
  * - หยุดเมื่อถูกยกเลิก (ออกจากหน้า) หรือครบ 10 นาที
  */
 async function waitForGeneration(
@@ -79,6 +80,7 @@ async function waitForGeneration(
 ): Promise<WaitResult> {
   const deadline = Date.now() + GENERATION_TIMEOUT_MS;
   let lastJob: GenerationJob | null = null;
+  let errorSince: number | null = null;
   let pollErrors = 0;
 
   while (!isCancelled()) {
@@ -91,6 +93,7 @@ async function waitForGeneration(
 
     try {
       const status = await getGenerationStatus(courseId);
+      errorSince = null;
       pollErrors = 0;
       lastJob = status;
       onUpdate(status);
@@ -99,13 +102,18 @@ async function waitForGeneration(
       }
     } catch {
       pollErrors += 1;
-      if (pollErrors >= MAX_POLL_ERRORS) {
+      if (errorSince === null) errorSince = Date.now();
+      if (Date.now() - errorSince > POLL_ERROR_GRACE_MS) {
         return {
           job: lastJob,
           timedOut: false,
           cancelled: false,
           pollError: "การเชื่อมต่อขาดหายระหว่างติดตามสถานะ",
         };
+      }
+      // ถ้ายังไม่เกินเวลาผ่อนผัน ให้ลองใหม่ (เว้นระยะขึ้นเล็กน้อยเมื่อล้มติดกันหลายครั้ง)
+      if (pollErrors >= 4) {
+        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS * 2));
       }
     }
   }
@@ -136,6 +144,8 @@ export default function CreateCoursePage() {
   const [draftCourseId, setDraftCourseId] = useState<number | null>(null);
   // สถานะงานสร้างเกมที่ backend รายงานกลับมา (queued/running/ready/error)
   const [job, setJob] = useState<GenerationJob | null>(null);
+  // คอร์สที่กำลังติดตามอยู่ — ใช้ทำปุ่ม "ติดตามสถานะอีกครั้ง"
+  const [pendingCourseId, setPendingCourseId] = useState<number | null>(null);
   const [resumeReadyCourseId, setResumeReadyCourseId] = useState<number | null>(null);
   // true = ผู้ใช้ออกจากหน้าแล้ว → หยุด poll (งานยังทำต่อบนเซิร์ฟเวอร์)
   const cancelledRef = useRef(false);
@@ -201,6 +211,7 @@ export default function CreateCoursePage() {
 
       setJob(status);
       setBusy(true);
+      setPendingCourseId(courseId);
 
       const result = await waitForGeneration(courseId, () => disposed, setJob);
       if (disposed) return;
@@ -208,14 +219,25 @@ export default function CreateCoursePage() {
       if (result.job?.status === "ready") {
         localStorage.removeItem(GENERATION_KEY);
         setDraftCourseId(null);
+        setPendingCourseId(null);
         router.push(`/courses/${courseId}/preview`);
+        return;
+      }
+
+      if (result.job?.status === "idle") {
+        localStorage.removeItem(GENERATION_KEY);
+        setPendingCourseId(null);
+        setError("งานสร้างเกมหยุดกลางทาง กรุณากดสร้างอีกครั้ง");
+        setBusy(false);
         return;
       }
 
       setError(
         result.timedOut
-          ? "ใช้เวลานานกว่าที่กำหนด ระบบอาจยังทำงานอยู่ — กลับมาเปิดหน้านี้ใหม่เพื่อติดตามต่อ"
-          : result.pollError ?? result.job?.error ?? "สร้างเกมไม่สำเร็จ"
+          ? "ใช้เวลานานกว่าที่กำหนด ระบบอาจยังทำงานอยู่ — กด “ติดตามสถานะอีกครั้ง” หรือกลับมาเปิดหน้านี้ใหม่"
+          : result.pollError
+            ? "การเชื่อมต่อขาดหาย — งานอาจยังทำต่ออยู่ กด “ติดตามสถานะอีกครั้ง”"
+            : result.job?.error ?? "สร้างเกมไม่สำเร็จ"
       );
       setBusy(false);
     }
@@ -296,6 +318,78 @@ export default function CreateCoursePage() {
     }
   }
 
+  /** ติดตามงานที่เริ่มไว้ — จบแล้วพาไป preview, ล้มเหลวแล้วแสดงสาเหตุ */
+  async function trackGeneration(courseId: number) {
+    const result = await waitForGeneration(courseId, () => cancelledRef.current, setJob);
+    if (result.cancelled) return; // ออกจากหน้าแล้ว — งานยังทำต่อบนเซิร์ฟเวอร์
+
+    if (result.job?.status === "ready") {
+      localStorage.removeItem(GENERATION_KEY);
+      setDraftCourseId(null);
+      setPendingCourseId(null);
+      router.push(`/courses/${courseId}/preview`);
+      return;
+    }
+
+    if (result.job?.status === "idle") {
+      // ไม่มีงานในระบบแล้วจริง ๆ — ให้เริ่มใหม่
+      localStorage.removeItem(GENERATION_KEY);
+      setPendingCourseId(null);
+      setError("งานสร้างเกมหยุดกลางทาง กรุณากดสร้างอีกครั้ง");
+      return;
+    }
+
+    setError(
+      result.timedOut
+        ? "ใช้เวลานานกว่าที่กำหนด ระบบอาจยังทำงานอยู่ — กด “ติดตามสถานะอีกครั้ง” หรือกลับมาเปิดหน้านี้ใหม่"
+        : result.pollError
+          ? "การเชื่อมต่อขาดหาย — งานอาจยังทำต่ออยู่ กด “ติดตามสถานะอีกครั้ง”"
+          : result.job?.error ?? "สร้างเกมไม่สำเร็จ"
+    );
+  }
+
+  /** กลับไปถามสถานะงานเดิมอีกครั้ง (เช่นหลังเน็ตหลุด) */
+  async function handleResumeTracking() {
+    if (!pendingCourseId || busy) return;
+
+    cancelledRef.current = false;
+    setBusy(true);
+    setError(null);
+
+    try {
+      const status = await getGenerationStatus(pendingCourseId);
+      setJob(status);
+
+      if (status.status === "ready") {
+        localStorage.removeItem(GENERATION_KEY);
+        setDraftCourseId(null);
+        setPendingCourseId(null);
+        router.push(`/courses/${pendingCourseId}/preview`);
+        return;
+      }
+      if (status.status !== "queued" && status.status !== "running") {
+        localStorage.removeItem(GENERATION_KEY);
+        setPendingCourseId(null);
+        setError(
+          status.status === "error"
+            ? status.error || "สร้างเกมไม่สำเร็จ"
+            : "งานสร้างเกมหยุดกลางทาง กรุณากดสร้างอีกครั้ง"
+        );
+        return;
+      }
+
+      await trackGeneration(pendingCourseId);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "ติดตามสถานะไม่สำเร็จ กรุณาตรวจสอบการเชื่อมต่อ"
+      );
+    } finally {
+      if (!cancelledRef.current) setBusy(false);
+    }
+  }
+
   async function handleGenerate() {
     if (!file) return setError("กรุณาใส่ไฟล์บทเรียนก่อน");
     if (!sufficiency) return setError("กรุณาตรวจสอบเนื้อหาก่อนสร้างเกม");
@@ -328,6 +422,7 @@ export default function CreateCoursePage() {
       }
 
       // จำคอร์สไว้ก่อนเริ่มงาน — ถ้าปิดหน้านี้ระหว่างสร้าง จะกลับมาติดตามต่อได้
+      setPendingCourseId(courseId);
       localStorage.setItem(GENERATION_KEY, String(courseId));
 
       const started = await startGeneration(courseId, {
@@ -336,21 +431,7 @@ export default function CreateCoursePage() {
       });
       setJob(started.job);
 
-      const result = await waitForGeneration(courseId, () => cancelledRef.current, setJob);
-      if (result.cancelled) return; // ออกจากหน้าแล้ว — งานยังทำต่อบนเซิร์ฟเวอร์
-
-      if (result.job?.status === "ready") {
-        localStorage.removeItem(GENERATION_KEY);
-        setDraftCourseId(null);
-        router.push(`/courses/${courseId}/preview`);
-        return;
-      }
-
-      setError(
-        result.timedOut
-          ? "ใช้เวลานานกว่าที่กำหนด ระบบอาจยังทำงานอยู่ — กดติดตามอีกครั้งหรือกลับมาเปิดหน้านี้ใหม่"
-          : result.pollError ?? result.job?.error ?? "สร้างเกมไม่สำเร็จ"
-      );
+      await trackGeneration(courseId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "สร้างเกมไม่สำเร็จ");
       setJob((prev) =>
@@ -631,7 +712,16 @@ export default function CreateCoursePage() {
 
           {error && (
             <div className="rounded-xl border border-rose-900/50 bg-rose-950/40 p-4 text-sm text-rose-300">
-              ⚠️ {error}
+              <p>⚠️ {error}</p>
+              {pendingCourseId !== null && !busy && (
+                <button
+                  type="button"
+                  onClick={handleResumeTracking}
+                  className="mt-3 rounded-lg border border-rose-400/60 bg-rose-500/15 px-4 py-2 font-bold text-rose-100 transition hover:bg-rose-500/25"
+                >
+                  🔄 ติดตามสถานะอีกครั้ง
+                </button>
+              )}
             </div>
           )}
 
