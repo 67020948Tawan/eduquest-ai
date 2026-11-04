@@ -1188,11 +1188,12 @@ function CoursePlayInner() {
     return (
       <>
         {!isGuest && <SiteHeader />}
-        <div className="pointer-events-none fixed right-4 top-20 z-[70] space-y-2">
+        {/* ดันเจี้ยนมี HUD ด้านบน → วาง toast กลางล่าง กันทับแถบพลังชีวิต/กุญแจ */}
+        <div className="pointer-events-none fixed bottom-6 left-1/2 z-[70] w-[min(92vw,560px)] -translate-x-1/2 space-y-2">
           {toasts.map((t) => (
             <div
               key={t.id}
-              className={`eq-pop rounded-xl border px-4 py-2 text-sm font-semibold shadow-lg backdrop-blur ${
+              className={`eq-pop rounded-xl border px-4 py-2 text-center text-sm font-semibold shadow-lg backdrop-blur ${
                 t.ok
                   ? "border-emerald-600/50 bg-emerald-950/80 text-emerald-200"
                   : "border-rose-600/50 bg-rose-950/80 text-rose-200"
