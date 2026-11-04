@@ -296,6 +296,8 @@ class AnswerSubmit(BaseModel):
     ordering: Optional[List[int]] = None
     # เวลาที่ใช้ตอบ (มิลลิวินาที) — ใช้คำนวณ Accuracy ตามสูตร 3.4.5
     response_ms: Optional[int] = Field(default=None, ge=0, le=3_600_000)
+    # "dungeon" = ตอบในห้องคำถามของดันเจี้ยน → ไม่คิดดาเมจศัตรู/ผู้เล่น (คนละระบบกับ HP ดันเจี้ยน)
+    mode: Optional[str] = None
 
 
 class ChapterComplete(BaseModel):
@@ -696,6 +698,7 @@ async def submit_answer(
     is_boss = total_chapters > 0 and chapter_index == total_chapters - 1
 
     player_stats = compute_player_stats(state.get("equipped"))
+    in_dungeon_quiz = payload.mode == "dungeon"
     attack_info: dict = {}
     xp_awarded = 0
     xp_breakdown: dict = {}
@@ -713,7 +716,7 @@ async def submit_answer(
         )
 
         # ---- ดาเมจฝั่ง server ตามสูตร 3-1..3-5 ----
-        if "turn_based" in modes:
+        if "turn_based" in modes and not in_dungeon_quiz:
             attack_info = compute_attack(
                 player_stats,
                 chapter_index,
@@ -742,7 +745,7 @@ async def submit_answer(
         state["combo"] = 0
         xp_breakdown = {}
         # ---- Turn-Based Combat: ตอบผิด → enemy โจมตี (CounterDamage) ----
-        if "turn_based" in modes:
+        if "turn_based" in modes and not in_dungeon_quiz:
             enemy_damage = counter_damage(chapter_index, is_boss)
             state["hp"] = max(0, (state.get("hp") or 0) - enemy_damage)
 
@@ -792,7 +795,7 @@ async def submit_answer(
         "is_boss": is_boss,
         "game_state": session.game_state,
         "skills": _skills_for_combo(session.game_state.get("combo", 0)),
-        "defeated": "turn_based" in modes and (session.game_state.get("hp") or 0) <= 0,
+        "defeated": "turn_based" in modes and not in_dungeon_quiz and (session.game_state.get("hp") or 0) <= 0,
         "raid_expired": raid_expired_msg,
     }
 
@@ -813,6 +816,25 @@ async def complete_chapter(
     chapter = ch_result.scalars().first()
     if not chapter:
         raise HTTPException(status_code=404, detail="ไม่พบ Chapter")
+
+    # ---- DUNGEON RUN gate: ต้องปราบบอสก่อนจบบท (เฉพาะผู้เล่นที่เข้าดันเจี้ยนแล้ว) ----
+    course_row = await db.get(Course, session.course_id)
+    if course_row:
+        dungeon, chapter_index = _dungeon_for_chapter(course_row, payload.chapter_id)
+        if dungeon is not None and chapter_index is not None:
+            raw_state = session.game_state or {}
+            store = raw_state.get("dungeons")
+            dungeon_state = (store or {}).get(str(chapter_index)) if isinstance(store, dict) else None
+            if not isinstance(dungeon_state, dict):
+                dungeon_state = raw_state.get("dungeon") or {}
+            if (
+                dungeon_state.get("chapter_index") == chapter_index
+                and not dungeon_state.get("cleared")
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="ต้องปราบบอสประจำบทให้สำเร็จก่อนจึงจะจบบทได้",
+                )
 
     completed = list(session.completed_chapters or [])
     newly_completed = payload.chapter_id not in completed
@@ -1429,6 +1451,10 @@ async def course_students_report(
         select(func.count(Chapter.id)).where(Chapter.course_id == course_id)
     )).scalar() or 0
 
+    config = course.game_config if isinstance(course.game_config, dict) else {}
+    dungeons_cfg = config.get("dungeons") if isinstance(config.get("dungeons"), dict) else {}
+    total_dungeons = len(dungeons_cfg)
+
     rows = await db.execute(
         select(GameSession)
         .options(selectinload(GameSession.user))
@@ -1456,8 +1482,26 @@ async def course_students_report(
             "best_accuracy": 0,
             "sessions": 0,
             "last_played": None,
+            "cleared_dungeons": set(),
+            "dungeon_rooms": 0,
+            "dungeon_knockouts": 0,
         })
         entry["sessions"] += 1
+
+        # 🗺️ สถิติ Dungeon Run (รวมทุก session ของผู้เล่น)
+        raw_state = s.game_state if isinstance(s.game_state, dict) else {}
+        store = raw_state.get("dungeons") if isinstance(raw_state.get("dungeons"), dict) else {}
+        legacy = raw_state.get("dungeon")
+        if isinstance(legacy, dict):
+            store = {**store, str(legacy.get("chapter_index")): legacy}
+        for key, dstate in store.items():
+            if not isinstance(dstate, dict):
+                continue
+            if dstate.get("cleared"):
+                entry["cleared_dungeons"].add(str(key))
+            entry["dungeon_rooms"] = max(entry["dungeon_rooms"], len(dstate.get("visited") or []))
+            entry["dungeon_knockouts"] = max(entry["dungeon_knockouts"], int(dstate.get("knockouts") or 0))
+
         score = s.xp or 0
         if score >= entry["best_score"]:
             ans = s.answered or {}
@@ -1478,6 +1522,12 @@ async def course_students_report(
             round(entry["best_chapters"] / total_chapters * 100) if total_chapters else 0
         )
         entry["completed"] = total_chapters > 0 and entry["best_chapters"] >= total_chapters
+
+        entry["dungeons_cleared"] = len(entry.pop("cleared_dungeons"))
+        entry["dungeons_total"] = total_dungeons
+        entry["dungeon_clear_percent"] = (
+            round(entry["dungeons_cleared"] / total_dungeons * 100) if total_dungeons else 0
+        )
         students.append(entry)
 
     students.sort(key=lambda r: r["best_score"], reverse=True)
@@ -1490,16 +1540,22 @@ async def course_students_report(
         round(sum(1 for s in students if s["completed"]) / len(students) * 100)
         if students else 0
     )
+    dungeon_clear_rate = (
+        round(sum(s["dungeons_cleared"] for s in students) / (len(students) * total_dungeons) * 100)
+        if students and total_dungeons else 0
+    )
 
     return {
         "course_id": course_id,
         "course_title": course.title,
         "total_chapters": total_chapters,
+        "total_dungeons": total_dungeons,
         "summary": {
             "students": len(students),
             "average_score": avg_score,
             "average_accuracy_percent": avg_accuracy,
             "completion_rate_percent": completion_rate,
+            "dungeon_clear_rate_percent": dungeon_clear_rate,
         },
         "students": students,
     }
@@ -1736,4 +1792,554 @@ async def raid_defend(
         "correct_answer_index": question.correct_answer_index,
         "explanation": question.explanation,
         "game_state": state,
+    }
+
+
+# ==============================================================================
+# DUNGEON RUN — แผนที่ RPG: เดินห้อง / กุญแจ / กับดัก / สมบัติ / บอสหลายเฟส
+#
+# สถานะเก็บใน game_state["dungeon"] (JSON) — ตรวจทุกอย่างฝั่งเซิร์ฟเวอร์
+# นิยามแผนที่เก็บใน course.game_config["dungeons"][chapter_index]
+# ==============================================================================
+
+PHASE_HP_SAFE = 100
+DUNGEON_BOSS_DAMAGE = 34      # ดาเมจต่อ 1 คำตอบถูก
+DUNGEON_PLAYER_DAMAGE = 18    # ดาเมจที่ผู้เล่นรับเมื่อตอบผิด
+DUNGEON_BOSS_XP = 20
+
+
+class DungeonEnter(BaseModel):
+    chapter_id: int
+    room_id: str
+
+
+class DungeonUseItem(BaseModel):
+    chapter_id: int
+    item_key: str
+
+
+class DungeonBossAttack(BaseModel):
+    chapter_id: int
+    question_id: int
+    answer_index: int
+
+
+async def _course_row(db: AsyncSession, course_id: int) -> Course:
+    course = await db.get(Course, course_id)
+    if not course:
+        raise HTTPException(status_code=404, detail="ไม่พบคอร์สเรียน")
+    return course
+
+
+def _dungeon_for_chapter(course: Course, chapter_id: int) -> tuple[Optional[dict], Optional[int]]:
+    """คืน (dungeon, chapter_index) ของบทนี้ — None ถ้าคอร์สนี้ไม่มีดันเจี้ยน"""
+    config = course.game_config or {}
+    chapter_map = config.get("chapter_map") or []
+    chapter_index = None
+    for entry in chapter_map:
+        if entry.get("chapter_id") == chapter_id:
+            chapter_index = entry.get("index")
+            break
+    if chapter_index is None:
+        return None, None
+    dungeon = (config.get("dungeons") or {}).get(str(chapter_index))
+    if not isinstance(dungeon, dict) or not dungeon.get("rooms"):
+        return None, chapter_index
+    return dungeon, chapter_index
+
+
+def _dungeon_state(state: dict, dungeon: dict, chapter_index: int) -> dict:
+    """คืนสถานะดันเจี้ยนของบท (สร้างใหม่ถ้ายังไม่เริ่ม) — เก็บแยกบทไม่ให้ทับกัน"""
+    store = state.get("dungeons")
+    if not isinstance(store, dict):
+        store = {}
+        state["dungeons"] = store
+
+    key = str(chapter_index)
+    current = store.get(key)
+
+    # อพยพ state รุ่นก่อนที่มีแค่ "dungeon" ก้อนเดียว
+    if not isinstance(current, dict):
+        legacy = state.get("dungeon")
+        if isinstance(legacy, dict) and legacy.get("chapter_index") == chapter_index:
+            current = legacy
+
+    if not isinstance(current, dict) or current.get("chapter_index") != chapter_index:
+        start = dungeon.get("start", "start")
+        current = {
+            "chapter_index": chapter_index,
+            "room": start,
+            "visited": [start],
+            "keys": [],
+            "items": [],
+            "hp": int(dungeon.get("max_hp") or PHASE_HP_SAFE),
+            "max_hp": int(dungeon.get("max_hp") or PHASE_HP_SAFE),
+            "cleared": False,
+            "knockouts": 0,
+        }
+    store[key] = current
+    state["dungeon"] = current
+    return current
+
+
+def _knock_out(dstate: dict, dungeon: dict) -> None:
+    """ผู้เล่นหมดพลัง → ฟื้นสติที่ทางเข้า (ครึ่งหนึ่งของ HP) ความคืบหน้าห้อง/กุญแจยังอยู่"""
+    max_hp = int(dstate.get("max_hp") or PHASE_HP_SAFE)
+    dstate["hp"] = max(1, max_hp // 2)
+    dstate["room"] = dungeon.get("start", "start")
+    dstate["boss"] = {"phase": 0, "hp": PHASE_HP_SAFE, "defeated": False}
+    dstate["knockouts"] = int(dstate.get("knockouts") or 0) + 1
+
+
+def _questions_answered(session: GameSession, question_ids: list[int]) -> bool:
+    answered = session.answered or {}
+    return all(str(qid) in answered for qid in question_ids)
+
+
+def _boss_question_view(question: QuizQuestion) -> Optional[dict]:
+    """แปลงคำถามทุกประเภทให้เป็นปรนัย 4 ตัวเลือกที่ใช้สู้บอสได้
+
+    - multiple_choice / true_false → ใช้ตามเดิม
+    - ordering → ถาม "ข้อใดคือลำดับแรกที่ถูกต้อง?"
+    - matching → ถาม "ข้อใดคือคู่ที่ถูกต้อง?" (สร้างตัวลวงจากคู่อื่น)
+    คืน None ถ้าแปลงไม่ได้จริง ๆ
+    """
+    q_type = question.question_type or "multiple_choice"
+    options = [str(o) for o in (question.options or [])]
+
+    if q_type in ("multiple_choice", "true_false"):
+        correct = question.correct_answer_index
+        if options and isinstance(correct, int) and 0 <= correct < len(options):
+            return {
+                "prompt": question.question,
+                "options": options,
+                "correct_index": correct,
+                "kind": q_type,
+            }
+        return None
+
+    if q_type == "ordering":
+        items = [str(i) for i in (question.ordering_items or question.options or [])]
+        order = question.correct_data if isinstance(question.correct_data, list) else []
+        if len(items) >= 2 and order and isinstance(order[0], int) and 0 <= order[0] < len(items):
+            return {
+                "prompt": f"{question.question} — ข้อใดคือลำดับแรกที่ถูกต้อง?",
+                "options": items,
+                "correct_index": order[0],
+                "kind": "ordering",
+            }
+        return None
+
+    if q_type == "matching":
+        pairs = [
+            (str(p.get("left")), str(p.get("right")))
+            for p in (question.matching_pairs or [])
+            if isinstance(p, dict) and p.get("left") and p.get("right")
+        ]
+        correct_map = question.correct_data if isinstance(question.correct_data, dict) else {}
+        fixed = [(left, str(correct_map.get(left, right))) for left, right in pairs]
+        if len(fixed) < 2:
+            return None
+        base_left, base_right = fixed[0]
+        options = [f"{base_left} → {base_right}"]
+        for i in range(1, len(fixed)):
+            left, right = fixed[i]
+            wrong_right = fixed[(i + 1) % len(fixed)][1]
+            if wrong_right == right:
+                wrong_right = fixed[(i + 2) % len(fixed)][1]
+            if wrong_right == right:
+                continue
+            options.append(f"{left} → {wrong_right}")
+            if len(options) >= 4:
+                break
+        if len(options) < 2:
+            return None
+        return {
+            "prompt": f"{question.question} — ข้อใดคือคู่ที่ถูกต้อง?",
+            "options": options,
+            "correct_index": 0,
+            "kind": "matching",
+        }
+
+    return None
+
+
+def _door_view(state: dict, dungeon: dict, door: dict) -> dict:
+    need = door.get("requires")
+    item = (dungeon.get("items") or {}).get(need or "")
+    return {
+        "to": door.get("to"),
+        "label": door.get("label") or "ไปต่อ",
+        "requires": need,
+        "requires_name": (item or {}).get("name"),
+        "locked": bool(need) and need not in (state.get("keys") or []),
+    }
+
+
+def _room_view(state: dict, dungeon: dict, room: dict) -> dict:
+    items = dungeon.get("items") or {}
+    reward = room.get("reward") or {}
+    reward_item = items.get(reward.get("item_key") or "") if reward else None
+    return {
+        "id": room.get("id"),
+        "type": room.get("type"),
+        "name": room.get("name"),
+        "desc": room.get("desc"),
+        "pos": room.get("pos") or {"x": 0, "y": 0},
+        "doors": [_door_view(state, dungeon, d) for d in (room.get("doors") or [])],
+        "question_ids": room.get("question_ids") or [],
+        "reward": reward_item,
+        "damage": room.get("damage") or 0,
+        "boss": room.get("boss"),
+        "visited": room.get("id") in (state.get("visited") or []),
+        "current": room.get("id") == state.get("room"),
+    }
+
+
+def _dungeon_payload(
+    session: GameSession,
+    dungeon: dict,
+    state: dict,
+    chapter_id: int,
+    chapter_index: int,
+) -> dict:
+    rooms = [
+        _room_view(state, dungeon, room)
+        for room in (dungeon.get("rooms") or {}).values()
+    ]
+    current = (dungeon.get("rooms") or {}).get(state.get("room")) or {}
+    reachable = {d.get("to") for d in (current.get("doors") or [])}
+    return {
+        "chapter_id": chapter_id,
+        "chapter_index": chapter_index,
+        "name": dungeon.get("name"),
+        "start": dungeon.get("start"),
+        "boss_room": dungeon.get("boss_room"),
+        "max_hp": dungeon.get("max_hp") or PHASE_HP_SAFE,
+        "rooms": rooms,
+        "items": dungeon.get("items") or {},
+        "reachable": sorted(r for r in reachable if r),
+        "state": state,
+    }
+
+
+@router.get("/sessions/{session_id}/dungeon")
+async def get_dungeon(
+    session_id: int,
+    chapter_id: int,
+    current_user: User = Depends(get_player),
+    db: AsyncSession = Depends(get_db),
+):
+    """แผนที่ดันเจี้ยนของบท + สถานะปัจจุบันของผู้เล่น"""
+    session = await _get_own_session(session_id, current_user, db)
+    course = await _course_row(db, session.course_id)
+    dungeon, chapter_index = _dungeon_for_chapter(course, chapter_id)
+    if not dungeon:
+        raise HTTPException(status_code=404, detail="บทนี้ไม่มีแผนที่ดันเจี้ยน")
+
+    modes = await _course_modes(db, session.course_id)
+    state = _ensure_state(session, modes)
+    dstate = _dungeon_state(state, dungeon, int(chapter_index))
+    session.game_state = sanitize_game_state(state)
+    await db.commit()
+    return _dungeon_payload(session, dungeon, dstate, chapter_id, int(chapter_index))
+
+
+@router.post("/sessions/{session_id}/dungeon/enter")
+async def enter_dungeon_room(
+    session_id: int,
+    payload: DungeonEnter,
+    current_user: User = Depends(get_player),
+    db: AsyncSession = Depends(get_db),
+):
+    """เดินเข้าห้องถัดไป — ตรวจประตู/กุญแจ/คำถามที่ยังไม่ตอบ"""
+    session = await _get_own_session(session_id, current_user, db)
+    course = await _course_row(db, session.course_id)
+    dungeon, chapter_index = _dungeon_for_chapter(course, payload.chapter_id)
+    if not dungeon:
+        raise HTTPException(status_code=404, detail="บทนี้ไม่มีแผนที่ดันเจี้ยน")
+
+    modes = await _course_modes(db, session.course_id)
+    state = _ensure_state(session, modes)
+    dstate = _dungeon_state(state, dungeon, int(chapter_index))
+
+    rooms = dungeon.get("rooms") or {}
+    target = rooms.get(payload.room_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="ไม่พบห้องนี้ในดันเจี้ยน")
+
+    current_room = rooms.get(dstate.get("room")) or {}
+    door = next(
+        (d for d in (current_room.get("doors") or []) if d.get("to") == payload.room_id),
+        None,
+    )
+    is_same = payload.room_id == dstate.get("room")
+    # เดินย้อนกลับไปห้องที่เคยสำรวจแล้วได้ (fast travel) — กันความรู้สึกติดกับ
+    # ประตูที่ยังไม่เคยเปิด/ห้องที่ยังไม่เคยเข้า ยังต้องเดินผ่านประตูตามปกติ
+    is_visited = payload.room_id in (dstate.get("visited") or [])
+    if not door and not is_same and not is_visited:
+        raise HTTPException(status_code=400, detail="ห้องนี้ไม่ได้อยู่ติดกับตำแหน่งปัจจุบัน")
+
+    if door and door.get("requires") and door["requires"] not in (dstate.get("keys") or []):
+        item = (dungeon.get("items") or {}).get(door["requires"]) or {}
+        raise HTTPException(
+            status_code=400,
+            detail=f"ประตูล็อกอยู่ — ต้องมี {item.get('name') or 'กุญแจ'} ก่อน",
+        )
+
+    # ต้องตอบคำถามของห้องปัจจุบันให้ครบก่อนออกจากห้อง quiz
+    pending = [
+        qid for qid in (current_room.get("question_ids") or [])
+        if str(qid) not in (session.answered or {})
+    ]
+    if pending and not is_same:
+        raise HTTPException(
+            status_code=400,
+            detail=f"ยังมีคำถามในห้องนี้ที่ยังไม่ตอบ {len(pending)} ข้อ",
+        )
+
+    # บอสเปิดได้เมื่อผ่านห้อง quiz ครบทุกห้องแล้ว
+    if target.get("type") == "boss":
+        for room in rooms.values():
+            if room.get("type") != "quiz":
+                continue
+            if not _questions_answered(session, room.get("question_ids") or []):
+                raise HTTPException(
+                    status_code=400,
+                    detail="ต้องตอบคำถามให้ครบทุกห้องก่อนเข้าห้องบอส",
+                )
+
+    events: list[dict] = []
+    first_visit = payload.room_id not in (dstate.get("visited") or [])
+
+    if first_visit:
+        dstate.setdefault("visited", []).append(payload.room_id)
+        room_type = target.get("type")
+
+        if room_type == "treasure":
+            reward = target.get("reward") or {}
+            item_key = reward.get("item_key")
+            item = (dungeon.get("items") or {}).get(item_key or "")
+            if item:
+                if item.get("type") == "key":
+                    if item_key not in dstate.setdefault("keys", []):
+                        dstate["keys"].append(item_key)
+                else:
+                    dstate.setdefault("items", []).append(item_key)
+                events.append({"type": "item", "item": item})
+        elif room_type == "trap":
+            dmg = int(target.get("damage") or 0)
+            if dmg:
+                dstate["hp"] = max(0, int(dstate.get("hp") or 0) - dmg)
+                events.append({"type": "damage", "amount": dmg, "hp": dstate["hp"]})
+                if dstate["hp"] <= 0:
+                    _knock_out(dstate, dungeon)
+                    events.append({"type": "knockout", "hp": dstate["hp"]})
+        elif room_type == "npc":
+            events.append({"type": "lore", "text": target.get("desc")})
+
+    knocked_out = any(ev.get("type") == "knockout" for ev in events)
+    if not knocked_out:
+        dstate["room"] = payload.room_id
+    session.game_state = sanitize_game_state(state)
+    await db.commit()
+
+    return {
+        **_dungeon_payload(session, dungeon, dstate, payload.chapter_id, int(chapter_index)),
+        "room": _room_view(dstate, dungeon, target),
+        "events": events,
+        "game_state": session.game_state,
+    }
+
+
+@router.post("/sessions/{session_id}/dungeon/use-item")
+async def use_dungeon_item(
+    session_id: int,
+    payload: DungeonUseItem,
+    current_user: User = Depends(get_player),
+    db: AsyncSession = Depends(get_db),
+):
+    """ใช้ไอเทมระหว่างเดินดันเจี้ยน (ตอนนี้: โพชั่นฟื้นพลัง)"""
+    session = await _get_own_session(session_id, current_user, db)
+    course = await _course_row(db, session.course_id)
+    dungeon, chapter_index = _dungeon_for_chapter(course, payload.chapter_id)
+    if not dungeon:
+        raise HTTPException(status_code=404, detail="บทนี้ไม่มีแผนที่ดันเจี้ยน")
+
+    modes = await _course_modes(db, session.course_id)
+    state = _ensure_state(session, modes)
+    dstate = _dungeon_state(state, dungeon, int(chapter_index))
+
+    item = (dungeon.get("items") or {}).get(payload.item_key)
+    if not item:
+        raise HTTPException(status_code=404, detail="ไม่พบไอเทมนี้")
+    if payload.item_key not in (dstate.get("items") or []):
+        raise HTTPException(status_code=400, detail="คุณยังไม่มีไอเทมนี้")
+    if item.get("type") != "heal":
+        raise HTTPException(status_code=400, detail="ไอเทมนี้ใช้กลางดันเจี้ยนไม่ได้")
+
+    max_hp = int(dstate.get("max_hp") or PHASE_HP_SAFE)
+    if int(dstate.get("hp") or 0) >= max_hp:
+        raise HTTPException(status_code=400, detail="พลังชีวิตเต็มอยู่แล้ว")
+
+    dstate["items"].remove(payload.item_key)
+    dstate["hp"] = min(max_hp, int(dstate.get("hp") or 0) + int(item.get("heal") or 0))
+    session.game_state = sanitize_game_state(state)
+    await db.commit()
+
+    return {
+        **_dungeon_payload(session, dungeon, dstate, payload.chapter_id, int(chapter_index)),
+        "healed": int(item.get("heal") or 0),
+        "game_state": session.game_state,
+    }
+
+
+@router.get("/sessions/{session_id}/dungeon/boss-question")
+async def dungeon_boss_question(
+    session_id: int,
+    chapter_id: int,
+    current_user: User = Depends(get_player),
+    db: AsyncSession = Depends(get_db),
+):
+    """สุ่มคำถามของบทมาใช้ต่อสู้บอส (ไม่เผยเฉลย)"""
+    session = await _get_own_session(session_id, current_user, db)
+    course = await _course_row(db, session.course_id)
+    dungeon, chapter_index = _dungeon_for_chapter(course, chapter_id)
+    if not dungeon:
+        raise HTTPException(status_code=404, detail="บทนี้ไม่มีแผนที่ดันเจี้ยน")
+
+    result = await db.execute(select(QuizQuestion).where(QuizQuestion.chapter_id == chapter_id))
+    questions = list(result.scalars().all())
+    if not questions:
+        raise HTTPException(status_code=404, detail="ไม่พบคำถามสำหรับบทนี้")
+
+    # แปลงทุกประเภทให้เป็นปรนัยที่ต่อสู้ได้ (กันบทที่มีแต่จับคู่/เรียงลำดับ)
+    usable = [(q, _boss_question_view(q)) for q in questions]
+    usable = [(q, v) for q, v in usable if v is not None]
+    if not usable:
+        raise HTTPException(status_code=404, detail="บทนี้ยังไม่มีคำถามที่ใช้ต่อสู้กับบอสได้")
+    q, view = _random.choice(usable)
+    modes = await _course_modes(db, session.course_id)
+    state = _ensure_state(session, modes)
+    dstate = _dungeon_state(state, dungeon, int(chapter_index))
+    boss = dstate.get("boss") or {}
+    phases = (
+        ((dungeon.get("rooms") or {}).get(dungeon.get("boss_room")) or {}).get("boss") or {}
+    ).get("phases") or []
+    phase = int(boss.get("phase") or 0)
+
+    return {
+        "chapter_id": chapter_id,
+        "question_id": q.id,
+        "question": view["prompt"],
+        "options": view["options"],
+        "question_type": "multiple_choice",
+        "matching_pairs": None,
+        "ordering_items": None,
+        "points": q.points,
+        "boss": {
+            "phase": phase,
+            "hp": int(boss.get("hp") or PHASE_HP_SAFE),
+            "total_phases": len(phases),
+            "name": (phases[phase] or {}).get("name") if phase < len(phases) else None,
+        },
+        "player_hp": int(dstate.get("hp") or 0),
+        "max_hp": int(dstate.get("max_hp") or PHASE_HP_SAFE),
+    }
+
+
+@router.post("/sessions/{session_id}/dungeon/boss/attack")
+async def dungeon_boss_attack(
+    session_id: int,
+    payload: DungeonBossAttack,
+    current_user: User = Depends(get_player),
+    db: AsyncSession = Depends(get_db),
+):
+    """ตอบคำถามเพื่อโจมตีบอส — ถูก = ดาเมจบอส, ผิด = ผู้เล่นโดนดาเมจ"""
+    session = await _get_own_session(session_id, current_user, db)
+    course = await _course_row(db, session.course_id)
+    dungeon, chapter_index = _dungeon_for_chapter(course, payload.chapter_id)
+    if not dungeon:
+        raise HTTPException(status_code=404, detail="บทนี้ไม่มีแผนที่ดันเจี้ยน")
+
+    modes = await _course_modes(db, session.course_id)
+    state = _ensure_state(session, modes)
+    dstate = _dungeon_state(state, dungeon, int(chapter_index))
+
+    if dstate.get("cleared"):
+        raise HTTPException(status_code=400, detail="ปราบบอสของบทนี้ไปแล้ว")
+    if dstate.get("room") != dungeon.get("boss_room"):
+        raise HTTPException(status_code=400, detail="ต้องเข้าห้องบอสก่อนจึงจะโจมตีได้")
+
+    room = (dungeon.get("rooms") or {}).get(dungeon.get("boss_room")) or {}
+    phases = (room.get("boss") or {}).get("phases") or []
+    if not phases:
+        raise HTTPException(status_code=400, detail="ดันเจี้ยนนี้ไม่มีบอส")
+
+    question = await db.get(QuizQuestion, payload.question_id)
+    if not question or question.chapter_id != payload.chapter_id:
+        raise HTTPException(status_code=404, detail="ไม่พบคำถามนี้ในบท")
+
+    view = _boss_question_view(question)
+    if view is None:
+        raise HTTPException(status_code=400, detail="คำถามข้อนี้ใช้ต่อสู้กับบอสไม่ได้")
+    correct = payload.answer_index == view["correct_index"]
+    boss = dstate.get("boss") or {"phase": 0, "hp": PHASE_HP_SAFE, "defeated": False}
+    boss_hp = int(boss.get("hp") or PHASE_HP_SAFE)
+    phase = int(boss.get("phase") or 0)
+    player_hp = int(dstate.get("hp") or 0)
+
+    phase_changed = False
+    defeated = False
+    knocked_out = False
+    if correct:
+        boss_hp = max(0, boss_hp - DUNGEON_BOSS_DAMAGE)
+        session.xp = (session.xp or 0) + DUNGEON_BOSS_XP
+        _log_xp(db, current_user, session.course_id, session.id, DUNGEON_BOSS_XP, "dungeon_boss")
+        if boss_hp <= 0:
+            if phase + 1 >= len(phases):
+                defeated = True
+                dstate["cleared"] = True
+            else:
+                phase += 1
+                boss_hp = PHASE_HP_SAFE
+                phase_changed = True
+    else:
+        player_hp = max(0, player_hp - DUNGEON_PLAYER_DAMAGE)
+        if player_hp <= 0:
+            # หมดพลัง → ฟื้นที่ทางเข้า เริ่มสู้บอสใหม่ (ไม่ติดอยู่ในลูป HP 0)
+            knocked_out = True
+
+    if knocked_out:
+        boss = {"phase": 0, "hp": PHASE_HP_SAFE, "defeated": False}
+        _knock_out(dstate, dungeon)
+        player_hp = int(dstate["hp"])
+        phase = 0
+        boss_hp = PHASE_HP_SAFE
+    else:
+        boss.update({"phase": phase, "hp": boss_hp, "defeated": defeated})
+        dstate["boss"] = boss
+        dstate["hp"] = player_hp
+    session.game_state = sanitize_game_state(state)
+    await db.commit()
+
+    return {
+        "correct": correct,
+        "damage": DUNGEON_BOSS_DAMAGE if correct else 0,
+        "player_damage": 0 if correct else DUNGEON_PLAYER_DAMAGE,
+        "boss_hp": boss_hp,
+        "boss_max_hp": PHASE_HP_SAFE,
+        "phase": phase,
+        "total_phases": len(phases),
+        "phase_name": (phases[phase] or {}).get("name") if phase < len(phases) else None,
+        "phase_changed": phase_changed,
+        "defeated": defeated,
+        "knocked_out": knocked_out,
+        "room": dstate.get("room"),
+        "player_hp": player_hp,
+        "max_hp": int(dstate.get("max_hp") or PHASE_HP_SAFE),
+        "correct_answer_index": question.correct_answer_index,
+        "explanation": question.explanation,
+        "xp": session.xp,
+        "game_state": session.game_state,
     }

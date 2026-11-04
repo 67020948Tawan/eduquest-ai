@@ -362,6 +362,43 @@ def _fallback_question(chapter: dict) -> Optional[dict]:
     }
 
 
+def _normalize_dungeon_flavor(value: Any) -> Optional[dict]:
+    """ทำ flavour ของดันเจี้ยนให้ปลอดภัยต่อ schema (AI มักส่งชนิดข้อมูลผิด)"""
+    if not isinstance(value, dict):
+        return None
+
+    def text(key: str, limit: int = 80) -> Optional[str]:
+        raw = value.get(key)
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()[:limit]
+        return None
+
+    def texts(key: str, limit: int = 8) -> list[str]:
+        raw = value.get(key)
+        if not isinstance(raw, list):
+            return []
+        out = []
+        for item in raw:
+            if isinstance(item, str) and item.strip():
+                out.append(item.strip()[:200])
+            if len(out) >= limit:
+                break
+        return out
+
+    flavor = {
+        "name": text("name"),
+        "key_name": text("key_name", 60),
+        "boss_name": text("boss_name"),
+        "room_names": texts("room_names", 8),
+        "lore": texts("lore", 8),
+        "boss_phase_names": texts("boss_phase_names", 4),
+        "trap_name": text("trap_name", 60),
+    }
+    if not any(flavor.values()):
+        return None
+    return flavor
+
+
 def _normalize_ai_payload(raw: Any) -> Any:
     """normalize คำถามทุกข้อก่อน model_validate (กัน ValidationError ทำให้งานล้มทั้งใบ)"""
     if not isinstance(raw, dict):
@@ -390,6 +427,7 @@ def _normalize_ai_payload(raw: Any) -> Any:
             print(f"⚠️ [GameDirector] บท '{ch.get('title')}' คำถามเสียทั้งหมด — ใช้คำถามสำรอง")
             normalized = [fallback]
         ch["quiz_questions"] = normalized
+        ch["dungeon"] = _normalize_dungeon_flavor(ch.get("dungeon"))
         fixed_chapters.append(ch)
 
     payload["chapters"] = fixed_chapters
@@ -857,7 +895,12 @@ Visual Style ของเกม: {style_hint} (ใช้กำหนดโทน
 6. สำหรับ ordering: ให้กรอก ordering_items (array ของ items ในลำดับที่ AI สุ่ม) และ correct_data (array ของ indices ตามลำดับที่ถูกต้อง) — options ต้องเป็น items อย่างน้อย 3 รายการ (ห้ามใส่ ["เรียงลำดับ"])
 7. บังคับ: อย่างน้อย {target_chapters} chapters · คำถาม chapter ละ {target_q_per_chapter} ข้อ (ห้ามน้อยกว่านี้) · ถ้าเอกสารสั้นให้แตกหัวข้อย่อย/ตัวอย่าง/แบบฝึกหัดให้ครบตามเป้า อย่ายุบรวม
 8. ต้องมีคำถามอย่างน้อย 1 ข้อของทุกประเภทที่ระบุไว้ข้างต้น (multiple_choice, true_false, matching, ordering ตามที่เลือก) — ห้ามสร้างแต่ multiple_choice/true_false
-9. ผสมประเภทคำถามให้หลากหลายในแต่ละบท ตามที่อนุญาตไว้ข้างต้น"""
+9. ผสมประเภทคำถามให้หลากหลายในแต่ละบท ตามที่อนุญาตไว้ข้างต้น
+10. ทุก chapter ต้องมี field "dungeon" (ใช้แต่งบรรยากาศดันเจี้ยน — โครงสร้างดันเจี้ยนระบบสร้างเอง):
+   {{"name": "ชื่อดันเจี้ยนของบทนี้", "room_names": ["ชื่อห้อง 8 ชื่อ สั้น ๆ"], "lore": ["คำบรรยายห้องละ 1-2 ประโยค 8 ข้อ"],
+     "key_name": "ชื่อกุญแจประจำบท", "boss_name": "ชื่อบอสประจำบท", "boss_phase_names": ["ชื่อเฟส 2-3 ชื่อ"],
+     "trap_name": "ชื่อห้องกับดัก (ต้องไม่ใช่ชื่อวิญญาณผู้เฒ่า)"}}
+   - ต้องเป็นภาษา{language_rule} และอิงเนื้อหาบทนั้นจริง ห้ามใช้คำซ้ำกันทุกบท"""
 
     try:
         # Retry สูงสุด 3 รอบ:

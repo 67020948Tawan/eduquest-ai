@@ -8,6 +8,7 @@ import { PixelSprite, PixelScene, BattleStage, type BattlePhase } from "@/compon
 import BasePanel from "@/components/game/BasePanel";
 import DialogueBox, { type DialogueNpc } from "@/components/game/DialogueBox";
 import WorldMapView, { type MapNode } from "@/components/game/WorldMapView";
+import DungeonView from "@/components/game/DungeonView";
 import { useAuthToken } from "@/lib/useAuthToken";
 import {
   getCourseStructure,
@@ -28,6 +29,7 @@ import {
   type AnswerResult,
   type AnsweredRecord,
   type CheckpointResult,
+  type DungeonRoomView,
   type GameResult,
   type GameState,
   type InventoryPayload,
@@ -36,7 +38,7 @@ import {
   type SessionState,
 } from "@/lib/api";
 
-type Screen = "map" | "chapter" | "result";
+type Screen = "map" | "chapter" | "result" | "dungeon";
 
 interface Toast {
   id: number;
@@ -277,6 +279,10 @@ function CoursePlayInner() {
   const [activeChapter, setActiveChapter] = useState<ChapterView | null>(null);
   const [viewMode, setViewMode] = useState<"learn" | "play">("learn");
 
+  // Dungeon Run
+  const [dungeonChapter, setDungeonChapter] = useState<ChapterView | null>(null);
+  const [dungeonQuiz, setDungeonQuiz] = useState<{ chapter: ChapterView; roomName: string } | null>(null);
+
   // Per-question state
   const [selected, setSelected] = useState<Record<number, number | Record<string, string> | number[]>>({});
   const [results, setResults] = useState<Record<number, AnswerResult>>({});
@@ -439,23 +445,44 @@ function CoursePlayInner() {
   const npcsList = Array.isArray(world?.npcs) ? world.npcs : [];
 
   function chapterEnemy(chapterIndex: number) {
-    const isFinal = data && chapterIndex === data.chapters.length - 1;
+    const safeIndex = Math.max(0, chapterIndex);
+    const isFinal = data && safeIndex === data.chapters.length - 1;
     if (isFinal && bossesList.length > 0) {
-      const b = bossesList[Math.min(bossesList.length - 1, Math.floor(chapterIndex / Math.max(1, data!.chapters.length - bossesList.length)))];
+      const b = bossesList[
+        Math.min(
+          bossesList.length - 1,
+          Math.floor(safeIndex / Math.max(1, data!.chapters.length - bossesList.length))
+        )
+      ] ?? bossesList[bossesList.length - 1];
       return { name: b.name, isBoss: true, maxHp: Math.min(b.total_hp || 140, 200) };
     }
     if (enemiesList.length > 0) {
-      const e = enemiesList[chapterIndex % enemiesList.length];
-      return { name: e.name, isBoss: false, maxHp: 55 + chapterIndex * 15 };
+      const e = enemiesList[safeIndex % enemiesList.length];
+      return { name: e.name, isBoss: false, maxHp: 55 + safeIndex * 15 };
     }
-    return { name: `มอนสเตอร์ ${chapterIndex + 1}`, isBoss: false, maxHp: 55 + chapterIndex * 15 };
+    return { name: `มอนสเตอร์ ${safeIndex + 1}`, isBoss: false, maxHp: 55 + safeIndex * 15 };
   }
 
   // ---- Actions ----
 
-  function openChapter(chapter: ChapterView) {
+  function openChapter(
+    chapter: ChapterView,
+    opts: { classic?: boolean; noDialogue?: boolean; play?: boolean } = {}
+  ) {
+    // บทที่มีดันเจี้ยน → เข้าหน้าแผนที่ดันเจี้ยนก่อน (ยกเว้นมาจาก "ปราบบอสแล้ว")
+    if (!opts.classic && chapter.dungeon) {
+      setDungeonChapter(chapter);
+      setDungeonQuiz(null);
+      setActiveChapter(chapter);
+      setScreen("dungeon");
+      return;
+    }
+
+    setDungeonQuiz(null);
     setActiveChapter(chapter);
-    setViewMode(completedChapters.includes(chapter.chapter_id) ? "play" : "learn");
+    setViewMode(
+      opts.play || completedChapters.includes(chapter.chapter_id) ? "play" : "learn"
+    );
     setSelected({});
     setCheckpoint(null);
     setScreen("chapter");
@@ -467,7 +494,10 @@ function CoursePlayInner() {
     setQIndex(firstUn === -1 ? chapter.quiz_questions.length : firstUn);
 
     // Init enemy สำหรับ combat
-    const idx = data!.chapters.indexOf(chapter);
+    // หมายเหตุ: ตอนเข้าห้องคำถามในดันเจี้ยนจะส่ง chapter ที่ถูกกรองคำถาม (ไม่ใช่ object ใน data)
+    // → หา index จาก chapter_id แทน indexOf ตรง ๆ ไม่งั้นได้ -1 ทำให้ enemy/npc พัง
+    const foundIdx = data!.chapters.findIndex((c) => c.chapter_id === chapter.chapter_id);
+    const idx = foundIdx >= 0 ? foundIdx : 0;
     const enemy = chapterEnemy(idx);
     setEnemyHp(enemy.maxHp);
     enemyMaxHpRef.current = enemy.maxHp;
@@ -475,11 +505,29 @@ function CoursePlayInner() {
     defeatLockRef.current = false;
     setEnemyDefeatAnim(false);
 
-    // RPG dialogue เมื่อเข้า chapter (ยกเว้นเคยปิดแล้วใน run นี้)
-    if (hasRpg && npcsList.length > 0) {
+    // RPG dialogue เมื่อเข้า chapter (ยกเว้นเคยปิดแล้วใน run นี้ / เข้าจากดันเจี้ยน)
+    if (!opts.noDialogue && hasRpg && npcsList.length > 0) {
       const npc = npcsList[idx % npcsList.length];
       setDialogue({ name: npc.name, role: npc.role, dialogue: npc.dialogue });
     }
+  }
+
+  // เข้าห้อง quiz ในดันเจี้ยน → ใช้หน้าคำถามเดิม แต่กรองเฉพาะคำถามของห้องนั้น
+  function openDungeonQuizRoom(room: DungeonRoomView) {
+    if (!dungeonChapter) return;
+    const ids = new Set(room.question_ids);
+    const filtered: ChapterView = {
+      ...dungeonChapter,
+      quiz_questions: dungeonChapter.quiz_questions.filter((q) => ids.has(q.id)),
+    };
+    openChapter(filtered, { classic: true, noDialogue: true, play: true });
+    setDungeonQuiz({ chapter: filtered, roomName: room.name });
+  }
+
+  function backToDungeon() {
+    setDungeonQuiz(null);
+    if (dungeonChapter) setActiveChapter(dungeonChapter);
+    setScreen("dungeon");
   }
 
   async function handleRestart() {
@@ -495,6 +543,8 @@ function CoursePlayInner() {
       setActiveChapter(null);
       setGameOver(false);
       setScreen("map");
+      setDungeonChapter(null);
+      setDungeonQuiz(null);
       hydrateSession(fresh);
       pushToast("🔄 เริ่มการผจญภัยใหม่แล้ว!");
     } catch (err) {
@@ -517,6 +567,7 @@ function CoursePlayInner() {
           question_id: questionId,
           ...answerPayload,
           response_ms: responseMs,
+          ...(dungeonQuiz ? { mode: "dungeon" as const } : {}),
         });
         setResults((prev) => ({ ...prev, [questionId]: result }));
         setAnsweredMap((prev) => ({ ...prev, [String(questionId)]: result.correct }));
@@ -532,7 +583,7 @@ function CoursePlayInner() {
           pushToast(`✨ ${parts.join(" ")}`);
         }
 
-        if (hasCombat) {
+        if (hasCombat && !dungeonQuiz) {
           if (result.correct) {
             // ---- Hero lunge + attack (ดาเมจคำนวณจาก server ตามสูตร 3.4.5) ----
             const dmg = Math.max(0, Math.round(result.damage ?? 0));
@@ -594,7 +645,7 @@ function CoursePlayInner() {
         setSubmittingId(null);
       }
     },
-    [sessionId, results, hasCombat]
+    [sessionId, results, hasCombat, dungeonQuiz]
   );
 
   async function handleRevive() {
@@ -909,13 +960,16 @@ function CoursePlayInner() {
                     ).length;
                     const enemy = chapterEnemy(idx);
                     const isBoss = enemy.isBoss;
+                    const dungeon = chapter.dungeon;
                     return {
                       key: chapter.chapter_id,
                       title: zone?.name || chapter.title,
-                      subtitle: `${chapter.title} · ${qTotal} ภารกิจ${
-                        hasCombat ? ` · ${isBoss ? "BOSS " : ""}${enemy.name} ${enemy.maxHp} HP` : ""
-                      }`,
-                      icon: isBoss ? "👑" : envIcon(zone?.environment),
+                      subtitle: dungeon
+                        ? `🗺️ ${dungeon.name ?? "ดันเจี้ยน"} · ${dungeon.room_count} ห้อง · บอส ${dungeon.boss_phases} เฟส`
+                        : `${chapter.title} · ${qTotal} ภารกิจ${
+                            hasCombat ? ` · ${isBoss ? "BOSS " : ""}${enemy.name} ${enemy.maxHp} HP` : ""
+                          }`,
+                      icon: dungeon ? "🏰" : isBoss ? "👑" : envIcon(zone?.environment),
                       state: done ? "done" : unlocked ? "current" : "locked",
                       progressText: !unlocked ? "🔒" : qDone > 0 ? `${qDone}/${qTotal}` : "▶",
                       isBoss,
@@ -1128,6 +1182,48 @@ function CoursePlayInner() {
   }
 
   // =====================================================================
+  // SCREEN: DUNGEON (แผนที่ RPG ต่อบท)
+  // =====================================================================
+  if (screen === "dungeon" && dungeonChapter && sessionId) {
+    return (
+      <>
+        {!isGuest && <SiteHeader />}
+        <div className="pointer-events-none fixed right-4 top-20 z-[70] space-y-2">
+          {toasts.map((t) => (
+            <div
+              key={t.id}
+              className={`eq-pop rounded-xl border px-4 py-2 text-sm font-semibold shadow-lg backdrop-blur ${
+                t.ok
+                  ? "border-emerald-600/50 bg-emerald-950/80 text-emerald-200"
+                  : "border-rose-600/50 bg-rose-950/80 text-rose-200"
+              }`}
+            >
+              {t.msg}
+            </div>
+          ))}
+        </div>
+        <DungeonView
+          sessionId={sessionId}
+          chapter={dungeonChapter}
+          visualStyle={visualStyle}
+          answeredMap={answeredMap}
+          onExit={() => {
+            setDungeonChapter(null);
+            setScreen("map");
+          }}
+          onEnterQuizRoom={openDungeonQuizRoom}
+          onBossCleared={() =>
+            openChapter(dungeonChapter, { classic: true, noDialogue: true, play: true })
+          }
+          onXp={setXp}
+          onGameState={setGs}
+          notify={pushToast}
+        />
+      </>
+    );
+  }
+
+  // =====================================================================
   // SCREEN: RESULT
   // =====================================================================
   if (screen === "result" && gameResult) {
@@ -1241,23 +1337,24 @@ function CoursePlayInner() {
       <div className={`${isGuest ? "top-0" : "top-16"} sticky z-40 border-b border-slate-800/60 bg-slate-950/90 backdrop-blur`}>
         <div className="mx-auto flex max-w-7xl items-center gap-2 px-4 py-2 text-sm lg:px-6">
           <button
-            onClick={() => setScreen("map")}
-            aria-label="กลับแผนที่"
+            onClick={() => (dungeonQuiz ? backToDungeon() : setScreen("map"))}
+            aria-label={dungeonQuiz ? "กลับดันเจี้ยน" : "กลับแผนที่"}
             className="shrink-0 rounded-lg border border-slate-700 px-2.5 py-1.5 text-slate-300 transition hover:border-indigo-500 hover:text-white"
           >
-            ← <span className="hidden sm:inline">Map</span>
+            ← <span className="hidden sm:inline">{dungeonQuiz ? "Dungeon" : "Map"}</span>
           </button>
           <div className="min-w-0 flex-1">
             <p className="truncate font-bold leading-tight">{chapter.title}</p>
             {viewMode === "play" && (
               <p className="text-[11px] leading-tight text-slate-500">
                 ข้อ {Math.min(qIndex + 1, chapter.quiz_questions.length)}/{chapter.quiz_questions.length}
-                {hasCombat && <> · 👾 {enemy.isBoss ? "👑 " : ""}{enemy.name} {Math.max(0, enemyHp)}/{enemy.maxHp}</>}
+                {hasCombat && !dungeonQuiz && <> · 👾 {enemy.isBoss ? "👑 " : ""}{enemy.name} {Math.max(0, enemyHp)}/{enemy.maxHp}</>}
+                {dungeonQuiz && <> · 🗺️ {dungeonQuiz.roomName}</>}
               </p>
             )}
           </div>
           <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
-            {hasCombat && (
+            {hasCombat && !dungeonQuiz && (
               <span className="rounded-full border border-rose-500/30 bg-rose-950/40 px-2.5 py-1 text-xs font-bold text-rose-300">
                 ❤️ {gs.hp ?? 0}/{gs.max_hp ?? 100}
               </span>
@@ -1293,7 +1390,7 @@ function CoursePlayInner() {
           {/* ===== LEFT: มุมมองเกม (PC: sticky ค้างซ้าย · มือถือ: อยู่บนสุดย่อขนาด) ===== */}
           <aside className="lg:sticky lg:top-32">
             <div className={`relative overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/50 shadow-xl shadow-slate-950/60 ${enemyShake ? "eq-shake" : ""}`}>
-              {hasCombat && viewMode === "play" ? (
+              {hasCombat && viewMode === "play" && !dungeonQuiz ? (
                 <>
                   <BattleStage
                     environment={
@@ -1330,11 +1427,13 @@ function CoursePlayInner() {
             </div>
             {/* สถานะด่านใต้ฉาก — บรรทัดเดียว ไม่ซ้ำ HUD */}
             <p className="mt-2 truncate text-center text-xs text-slate-500">
-              {viewMode === "play"
-                ? hasCombat
-                  ? `⚔️ ตอบถูก = โจมตี${comboMult > 1 ? ` ×${comboMult}` : ""} · ตอบผิด = โดนสวน`
-                  : `📖 ${chapter.quiz_questions.length} ภารกิจในโซนนี้`
-                : `🎯 ${chapter.lesson?.objective ?? ""}`}
+              {dungeonQuiz
+                ? `🗺️ ห้อง ${dungeonQuiz.roomName} · ตอบครบเพื่อกลับเข้าดันเจี้ยน`
+                : viewMode === "play"
+                  ? hasCombat
+                    ? `⚔️ ตอบถูก = โจมตี${comboMult > 1 ? ` ×${comboMult}` : ""} · ตอบผิด = โดนสวน`
+                    : `📖 ${chapter.quiz_questions.length} ภารกิจในโซนนี้`
+                  : `🎯 ${chapter.lesson?.objective ?? ""}`}
             </p>
           </aside>
 
@@ -1680,12 +1779,12 @@ function CoursePlayInner() {
                           }}
                           disabled={!isComplete || submittingId === q.id}
                           className={`flex-1 rounded-lg px-4 py-2 text-sm font-bold transition-all active:scale-[0.98] disabled:bg-slate-800 disabled:text-slate-500 ${
-                            hasCombat
+                            hasCombat && !dungeonQuiz
                               ? "bg-gradient-to-r from-rose-600 to-red-500 text-white shadow-lg shadow-rose-950/50 hover:from-rose-500 hover:to-red-400"
                               : "bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow-lg shadow-indigo-950/50 hover:from-indigo-500 hover:to-violet-500"
                           }`}
                         >
-                          {submittingId === q.id ? "กำลังตรวจ..." : hasCombat ? "⚔️ โจมตี!" : "✅ ส่งคำตอบ"}
+                          {submittingId === q.id ? "กำลังตรวจ..." : hasCombat && !dungeonQuiz ? "⚔️ โจมตี!" : "✅ ส่งคำตอบ"}
                         </button>
                         {canHint && qType !== "matching" && qType !== "ordering" && (
                           <button
@@ -1764,12 +1863,21 @@ function CoursePlayInner() {
 
             {/* Checkpoint — ขึ้นทันทีเมื่อตอบครบ (ไม่ต้องมีกล่องซ้ำ) */}
             {chapterQuestionsAnswered && !checkpoint && (
-              <button
-                onClick={handleCompleteChapter}
-                className="mt-5 w-full rounded-xl bg-gradient-to-r from-amber-400 via-orange-400 to-amber-500 py-4 text-lg font-black text-slate-950 shadow-xl shadow-orange-600/30 transition-all hover:scale-[1.01] hover:from-amber-300 hover:via-orange-300 active:scale-[0.99]"
-              >
-                🎯 ตอบครบแล้ว! บันทึก Checkpoint — รับโบนัส!
-              </button>
+              dungeonQuiz ? (
+                <button
+                  onClick={backToDungeon}
+                  className="mt-5 w-full rounded-xl bg-gradient-to-r from-indigo-500 via-violet-500 to-indigo-600 py-4 text-lg font-black text-white shadow-xl shadow-indigo-900/40 transition-all hover:scale-[1.01] active:scale-[0.99]"
+                >
+                  🗺️ ตอบครบห้อง {dungeonQuiz.roomName} — กลับเข้าดันเจี้ยน
+                </button>
+              ) : (
+                <button
+                  onClick={handleCompleteChapter}
+                  className="mt-5 w-full rounded-xl bg-gradient-to-r from-amber-400 via-orange-400 to-amber-500 py-4 text-lg font-black text-slate-950 shadow-xl shadow-orange-600/30 transition-all hover:scale-[1.01] hover:from-amber-300 hover:via-orange-300 active:scale-[0.99]"
+                >
+                  🎯 ตอบครบแล้ว! บันทึก Checkpoint — รับโบนัส!
+                </button>
+              )
             )}
 
             {checkpoint && (

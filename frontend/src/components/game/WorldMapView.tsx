@@ -46,10 +46,13 @@ export default function WorldMapView({
   nodes,
   visualStyle,
   onOpen,
+  activeKey,
 }: {
   nodes: MapNode[];
   visualStyle: string;
   onOpen: (index: number) => void;
+  /** ใช้กับแผนที่ดันเจี้ยน: ปักหมุดตัวละครที่ห้องนี้แทน "โหนดแรกที่ current" */
+  activeKey?: string | number;
 }) {
   const H = nodes.length * ROW_H + TOP_PAD + BOTTOM_PAD;
   const count = nodes.length;
@@ -66,7 +69,14 @@ export default function WorldMapView({
   // ตำแหน่งผู้เล่น = โหนดปัจจุบัน (โหนดแรกที่ยังไม่จบ) — เดินไปเมื่อกด
   // ถ้าจบหมดแล้วให้ยืนที่โหนดสุดท้าย
   const foundCurrent = nodes.findIndex((n) => n.state === "current");
-  const currentIdx = foundCurrent === -1 ? Math.max(0, nodes.length - 1) : foundCurrent;
+  const pinnedIndex =
+    activeKey === undefined ? -1 : nodes.findIndex((n) => n.key === activeKey);
+  const currentIdx =
+    pinnedIndex !== -1
+      ? pinnedIndex
+      : foundCurrent === -1
+        ? Math.max(0, nodes.length - 1)
+        : foundCurrent;
   const [pos, setPos] = useState(pts[currentIdx] ?? { x: 50, y: 80 });
   const [walking, setWalking] = useState(false);
   const walkingRef = useRef(false);
@@ -90,6 +100,9 @@ export default function WorldMapView({
     }
     walkingRef.current = true;
     setWalking(true);
+    // แจ้ง parent ทันที — อนิเมชันเดินเป็นแค่ภาพประกอบ
+    // (เดิมรออนิเมชันจบก่อน ทำให้กดประตูระหว่างเดินแล้วโดน "ลาก" ไปห้องอื่นทีหลัง)
+    onOpen(i);
     const dur = 650;
     let t0 = -1;
     function step(t: number) {
@@ -103,7 +116,6 @@ export default function WorldMapView({
         t0 = -1;
         walkingRef.current = false;
         setWalking(false);
-        onOpen(i);
       }
     }
     requestAnimationFrame(step);

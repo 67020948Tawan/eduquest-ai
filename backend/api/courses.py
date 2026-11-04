@@ -889,6 +889,7 @@ async def _run_generation(
 
     total_chapters = max(1, len(ai_result["chapters"]))
     created_chapter_ids = []
+    chapter_question_ids: list[int] = []
     for idx, chapter_data in enumerate(ai_result["chapters"]):
         generation_jobs.update(
             course_id,
@@ -908,7 +909,7 @@ async def _run_generation(
             content=lesson_data["content"],
         ))
         for q in chapter_data["quiz_questions"]:
-            db.add(QuizQuestion(
+            question = QuizQuestion(
                 chapter_id=new_chapter.id,
                 question=q["question"],
                 options=q["options"],
@@ -921,8 +922,16 @@ async def _run_generation(
                 matching_pairs=q.get("matching_pairs"),
                 ordering_items=q.get("ordering_items"),
                 correct_data=q.get("correct_data"),
-            ))
-        created_chapter_ids.append({"chapter_id": new_chapter.id, "index": idx})
+            )
+            db.add(question)
+            await db.flush()
+            chapter_question_ids.append(question.id)
+        created_chapter_ids.append({
+            "chapter_id": new_chapter.id,
+            "index": idx,
+            "question_ids": chapter_question_ids,
+        })
+        chapter_question_ids = []
 
     gamification = ai_result["gamification"]
     for lv in gamification["levels"]:
@@ -933,6 +942,20 @@ async def _run_generation(
     # เก็บ Game Config ทั้งชุด (world/npcs/enemies/bosses) — map chapter_index → chapter_id
     game_config = dict(ai_result)
     game_config["chapter_map"] = created_chapter_ids
+
+    # 🗺️ DUNGEON RUN — สร้างแผนที่ RPG ต่อบท (โครงสร้างจากระบบ + flavour จาก AI)
+    from services.dungeon import build_dungeons, validate_dungeon
+
+    dungeons = build_dungeons(
+        ai_result["chapters"],
+        created_chapter_ids,
+        lang=(ai_result.get("language") or "th"),
+    )
+    for chapter_key, dungeon in dungeons.items():
+        problems = validate_dungeon(dungeon)
+        if problems:
+            print(f"⚠️ [Dungeon] chapter {chapter_key} ปัญหา: {problems}")
+    game_config["dungeons"] = dungeons
 
     # 🎨 AI ART DIRECTOR — เลือก asset จากคลังโค้ด → attach อัตโนมัติ
     generation_jobs.update(
@@ -1343,10 +1366,30 @@ def _build_structure_payload(course: Course, chapters, levels, badges) -> dict:
         }
 
     chapters_output = []
+    dungeon_map = {}
+    index_by_chapter_id = {}
+    if course.game_config and isinstance(course.game_config, dict):
+        dungeon_map = course.game_config.get("dungeons") or {}
+        for m in course.game_config.get("chapter_map") or []:
+            index_by_chapter_id[m.get("chapter_id")] = m.get("index")
+
     for ch in sorted(chapters, key=lambda c: c.order_index):
+        chapter_index = index_by_chapter_id.get(ch.id)
+        dungeon_cfg = dungeon_map.get(str(chapter_index)) if isinstance(dungeon_map, dict) else None
+        dungeon_summary = None
+        if isinstance(dungeon_cfg, dict) and dungeon_cfg.get("rooms"):
+            boss_cfg = (dungeon_cfg.get("rooms") or {}).get(dungeon_cfg.get("boss_room")) or {}
+            boss_cfg = boss_cfg.get("boss") or {}
+            dungeon_summary = {
+                "name": dungeon_cfg.get("name"),
+                "room_count": len(dungeon_cfg.get("rooms") or {}),
+                "boss_name": boss_cfg.get("name"),
+                "boss_phases": len(boss_cfg.get("phases") or []),
+            }
         chapters_output.append({
             "chapter_id": ch.id,
             "title": ch.title,
+            "dungeon": dungeon_summary,
             "lesson": {
                 "title": ch.lesson.title,
                 "objective": ch.lesson.objective,

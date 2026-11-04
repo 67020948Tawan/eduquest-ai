@@ -63,10 +63,27 @@ class LessonAI(BaseModel):
     content: str
 
 
+class DungeonFlavorAI(BaseModel):
+    """Flavour ของดันเจี้ยนที่ AI แต่งให้ (โครงสร้างกราฟสร้างโดยระบบ ไม่ได้มาจาก AI)
+
+    ทุก field เป็น optional — ถ้า AI ไม่ส่งมา ระบบใช้ชื่อสำรองให้ทันที
+    (กันปัญหาแบบเดียวกับ options ที่เคยทำให้งานล้มทั้งใบ)
+    """
+    name: Optional[str] = None
+    room_names: List[str] = Field(default_factory=list)
+    lore: List[str] = Field(default_factory=list)
+    key_name: Optional[str] = None
+    boss_name: Optional[str] = None
+    boss_phase_names: List[str] = Field(default_factory=list)
+    # ชื่อห้องกับดักแยกจากห้องวิญญาณ (variant อาจมีอย่างใดอย่างหนึ่งหรือทั้งคู่)
+    trap_name: Optional[str] = None
+
+
 class ChapterAI(BaseModel):
     title: str
     lesson: LessonAI
     quiz_questions: List[QuizQuestionAI] = Field(min_length=1, max_length=8)
+    dungeon: Optional[DungeonFlavorAI] = None
 
 
 # ------------------------------------------------------------------------------

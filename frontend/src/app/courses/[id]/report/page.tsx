@@ -39,6 +39,11 @@ export default function CourseReportPage() {
       "sessions",
       "completed",
       "last_played",
+      "dungeons_cleared",
+      "dungeons_total",
+      "dungeon_clear_percent",
+      "dungeon_rooms",
+      "dungeon_knockouts",
     ];
     const rows = report.students.map((s) => [
       s.rank,
@@ -51,6 +56,11 @@ export default function CourseReportPage() {
       s.sessions,
       s.completed ? "yes" : "no",
       s.last_played ?? "",
+      s.dungeons_cleared,
+      s.dungeons_total,
+      s.dungeon_clear_percent,
+      s.dungeon_rooms,
+      s.dungeon_knockouts,
     ]);
     const csv = [header.join(","), ...rows.map((r) => r.join(","))].join("\n");
     const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
@@ -74,6 +84,7 @@ export default function CourseReportPage() {
             <h1 className="mt-2 text-3xl font-bold">📊 รายงานผู้เรียน</h1>
             <p className="mt-1 text-sm text-slate-400">
               {report?.course_title ?? "กำลังโหลด..."} · {report?.total_chapters ?? 0} บท
+              {(report?.total_dungeons ?? 0) > 0 && <> · 🏰 {report?.total_dungeons} ดันเจี้ยน</>}
             </p>
           </div>
           <button
@@ -91,12 +102,17 @@ export default function CourseReportPage() {
           <div className="h-64 animate-pulse rounded-2xl bg-slate-900/50" />
         ) : (
           <>
-            <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
               {[
                 { label: "ผู้เรียน", value: report.summary.students, icon: "👥" },
                 { label: "คะแนนเฉลี่ย", value: report.summary.average_score, icon: "⭐" },
                 { label: "ความแม่นยำเฉลี่ย", value: `${report.summary.average_accuracy_percent}%`, icon: "🎯" },
                 { label: "จบครบ", value: `${report.summary.completion_rate_percent}%`, icon: "✅" },
+                {
+                  label: "ดันเจี้ยนที่ปราบ",
+                  value: `${report.summary.dungeon_clear_rate_percent ?? 0}%`,
+                  icon: "🏰",
+                },
               ].map((card) => (
                 <div key={card.label} className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
                   <p className="text-sm text-slate-400">
@@ -113,7 +129,7 @@ export default function CourseReportPage() {
               </div>
             ) : (
               <div className="overflow-x-auto rounded-2xl border border-slate-800">
-                <table className="w-full min-w-[720px] text-left text-sm">
+                <table className="w-full min-w-[920px] text-left text-sm">
                   <thead className="bg-slate-900/80 text-xs uppercase tracking-wider text-slate-400">
                     <tr>
                       <th className="px-4 py-3">#</th>
@@ -124,6 +140,8 @@ export default function CourseReportPage() {
                       <th className="px-4 py-3 text-right">ความคืบหน้า</th>
                       <th className="px-4 py-3 text-right">เหรียญตรา</th>
                       <th className="px-4 py-3 text-right">รอบที่เล่น</th>
+                      <th className="px-4 py-3 text-right">ดันเจี้ยน</th>
+                      <th className="px-4 py-3 text-right">ห้องที่สำรวจ</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -165,6 +183,35 @@ export default function CourseReportPage() {
                         </td>
                         <td className="px-4 py-3 text-right text-slate-300">{student.badges}</td>
                         <td className="px-4 py-3 text-right text-slate-400">{student.sessions}</td>
+                        <td className="px-4 py-3 text-right">
+                          {(student.dungeons_total ?? 0) > 0 ? (
+                            <span
+                              className={
+                                student.dungeons_cleared >= student.dungeons_total
+                                  ? "font-semibold text-emerald-300"
+                                  : "text-slate-300"
+                              }
+                            >
+                              {student.dungeons_cleared}/{student.dungeons_total}
+                            </span>
+                          ) : (
+                            <span className="text-slate-600">—</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-right text-slate-400">
+                          {student.dungeon_rooms ? (
+                            <span title={`หมดพลัง ${student.dungeon_knockouts} ครั้ง`}>
+                              🚪 {student.dungeon_rooms}
+                              {student.dungeon_knockouts > 0 && (
+                                <span className="ml-1 text-xs text-rose-400">
+                                  💀{student.dungeon_knockouts}
+                                </span>
+                              )}
+                            </span>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

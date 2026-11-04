@@ -5,6 +5,8 @@
 # Backend ใช้ validate + คำนวณรางวัลจริง — Frontend mirror เพื่อ render
 # ==============================================================================
 
+from services.dungeon import sanitize_dungeon_state, sanitize_dungeon_store
+
 RESOURCES = ("gold", "wood", "stone", "crystal", "knowledge")
 
 # ------------------------------------------------------------------------------
@@ -394,6 +396,14 @@ def sanitize_game_state(state: dict) -> dict:
         item = ITEMS.get(key or "")
         equipped[slot] = key if item and item["type"] == slot else None
 
+    dungeon = sanitize_dungeon_state(state.get("dungeon"))
+    dungeons = sanitize_dungeon_store(state.get("dungeons"))
+    # เติมจากตัว active เผื่อ state รุ่นก่อนมีแค่ "dungeon"
+    if dungeon and str(dungeon.get("chapter_index")) not in dungeons:
+        dungeons[str(dungeon.get("chapter_index"))] = dungeon
+    if not dungeon and dungeons:
+        dungeon = dungeons[max(dungeons, key=lambda k: int(k) if k.isdigit() else 0)]
+
     return {
         "hp": hp,
         "max_hp": max_hp,
@@ -407,6 +417,8 @@ def sanitize_game_state(state: dict) -> dict:
         "resources": resources,
         "buildings": buildings,
         "equipped": equipped,
+        "dungeon": dungeon,
+        "dungeons": dungeons,
     }
 
 

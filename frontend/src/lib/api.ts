@@ -379,17 +379,24 @@ export interface StudentReportRow {
   sessions: number;
   completed: boolean;
   last_played: string | null;
+  dungeons_cleared: number;
+  dungeons_total: number;
+  dungeon_clear_percent: number;
+  dungeon_rooms: number;
+  dungeon_knockouts: number;
 }
 
 export interface TeacherReport {
   course_id: number;
   course_title: string;
   total_chapters: number;
+  total_dungeons?: number;
   summary: {
     students: number;
     average_score: number;
     average_accuracy_percent: number;
     completion_rate_percent: number;
+    dungeon_clear_rate_percent?: number;
   };
   students: StudentReportRow[];
 }
@@ -693,6 +700,7 @@ export interface ChapterView {
   title: string;
   lesson: LessonView | null;
   quiz_questions: QuizQuestionView[];
+  dungeon?: DungeonSummary | null;
 }
 
 export interface ZoneView {
@@ -849,6 +857,7 @@ export interface GameState {
   raid_cooldown_until?: number;
   raid?: RaidInfo | null;
   raids_repelled?: number;
+  dungeon?: DungeonStateView | null;
 }
 
 export interface SkillInfo {
@@ -971,6 +980,186 @@ export async function completeChapter(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ chapter_id: chapterId }),
   });
+}
+
+// ------------------------------------------------------------------------------
+// Dungeon Run — แผนที่ RPG (กุญแจ / กับดัก / สมบัติ / บอสหลายเฟส)
+// ------------------------------------------------------------------------------
+
+export interface DungeonSummary {
+  name: string | null;
+  room_count: number;
+  boss_name: string | null;
+  boss_phases: number;
+}
+
+export interface DungeonItem {
+  key: string;
+  name: string;
+  icon: string;
+  type: string;
+  heal?: number;
+}
+
+export interface DungeonDoor {
+  to: string;
+  label: string;
+  requires: string | null;
+  requires_name: string | null;
+  locked: boolean;
+}
+
+export interface DungeonRoomView {
+  id: string;
+  type: "quiz" | "treasure" | "trap" | "npc" | "boss";
+  name: string;
+  desc: string;
+  pos: { x: number; y: number };
+  doors: DungeonDoor[];
+  question_ids: number[];
+  reward: DungeonItem | null;
+  damage: number;
+  boss: { name: string; phases: { name: string; hp: number; concept: string }[] } | null;
+  visited: boolean;
+  current: boolean;
+}
+
+export interface DungeonStateView {
+  chapter_index: number;
+  room: string;
+  visited: string[];
+  keys: string[];
+  items: string[];
+  hp: number;
+  max_hp: number;
+  cleared: boolean;
+  knockouts?: number;
+  boss?: { phase: number; hp: number; defeated: boolean };
+}
+
+export interface DungeonPayload {
+  chapter_id: number;
+  chapter_index: number;
+  name: string;
+  start: string;
+  boss_room: string;
+  max_hp: number;
+  rooms: DungeonRoomView[];
+  items: Record<string, DungeonItem>;
+  reachable: string[];
+  state: DungeonStateView;
+}
+
+export interface DungeonEvent {
+  type: "item" | "damage" | "lore" | "knockout";
+  item?: DungeonItem;
+  amount?: number;
+  hp?: number;
+  text?: string;
+}
+
+export interface DungeonEnterResult extends DungeonPayload {
+  room: DungeonRoomView;
+  events: DungeonEvent[];
+  game_state: GameState;
+}
+
+export interface DungeonBossQuestion {
+  chapter_id: number;
+  question_id: number;
+  question: string;
+  options: string[];
+  question_type: QuestionType;
+  points: number;
+  boss: { phase: number; hp: number; total_phases: number; name: string | null };
+  player_hp: number;
+  max_hp: number;
+}
+
+export interface DungeonBossAttackResult {
+  correct: boolean;
+  damage: number;
+  player_damage: number;
+  boss_hp: number;
+  boss_max_hp: number;
+  phase: number;
+  total_phases: number;
+  phase_name: string | null;
+  phase_changed: boolean;
+  defeated: boolean;
+  knocked_out?: boolean;
+  room?: string;
+  player_hp: number;
+  max_hp: number;
+  correct_answer_index: number;
+  explanation: string;
+  xp: number;
+  game_state: GameState;
+}
+
+export async function getDungeon(
+  sessionId: number,
+  chapterId: number
+): Promise<DungeonPayload> {
+  return request<DungeonPayload>(
+    `/api/sessions/${sessionId}/dungeon?chapter_id=${chapterId}`
+  );
+}
+
+export async function enterDungeonRoom(
+  sessionId: number,
+  chapterId: number,
+  roomId: string
+): Promise<DungeonEnterResult> {
+  return request<DungeonEnterResult>(`/api/sessions/${sessionId}/dungeon/enter`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chapter_id: chapterId, room_id: roomId }),
+  });
+}
+
+export async function useDungeonItem(
+  sessionId: number,
+  chapterId: number,
+  itemKey: string
+): Promise<DungeonPayload & { healed: number; game_state: GameState }> {
+  return request<DungeonPayload & { healed: number; game_state: GameState }>(
+    `/api/sessions/${sessionId}/dungeon/use-item`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chapter_id: chapterId, item_key: itemKey }),
+    }
+  );
+}
+
+export async function getDungeonBossQuestion(
+  sessionId: number,
+  chapterId: number
+): Promise<DungeonBossQuestion> {
+  return request<DungeonBossQuestion>(
+    `/api/sessions/${sessionId}/dungeon/boss-question?chapter_id=${chapterId}`
+  );
+}
+
+export async function attackDungeonBoss(
+  sessionId: number,
+  chapterId: number,
+  questionId: number,
+  answerIndex: number
+): Promise<DungeonBossAttackResult> {
+  return request<DungeonBossAttackResult>(
+    `/api/sessions/${sessionId}/dungeon/boss/attack`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chapter_id: chapterId,
+        question_id: questionId,
+        answer_index: answerIndex,
+      }),
+    }
+  );
 }
 
 export interface GameResult {
