@@ -306,10 +306,10 @@ export default function DungeonView({
   return (
     <DungeonShell chapter={chapter} onExit={onExit} dungeonName={dungeon.name}>
       {/* HUD */}
-      <div className="mb-3 flex flex-wrap items-center gap-2 text-xs sm:text-sm">
+      <div className="mb-4 flex flex-wrap items-center gap-2 text-sm">
         <div className="flex min-w-[150px] flex-1 items-center gap-2">
           <span className="text-rose-300">❤️</span>
-          <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-slate-800">
+          <div className="h-3 flex-1 overflow-hidden rounded-full bg-slate-800">
             <div
               className="h-full rounded-full bg-gradient-to-r from-rose-500 to-emerald-400 transition-all duration-500"
               style={{ width: `${hpRatio * 100}%` }}
@@ -344,7 +344,7 @@ export default function DungeonView({
         )}
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_430px] lg:gap-5">
         {/* แผนที่ */}
         <div>
           <WorldMapView
@@ -362,29 +362,29 @@ export default function DungeonView({
         {/* แผงห้องปัจจุบัน */}
         <aside className="space-y-3">
           {state.cleared ? (
-            <div className="rounded-2xl border border-emerald-700/60 bg-emerald-950/30 p-5 text-center">
-              <p className="text-4xl">🏆</p>
-              <h3 className="mt-2 text-lg font-black text-emerald-300">ปราบบอสสำเร็จ!</h3>
-              <p className="mt-1 text-sm text-emerald-200/80">
+            <div className="rounded-2xl border border-emerald-700/60 bg-emerald-950/30 p-6 text-center">
+              <p className="text-5xl">🏆</p>
+              <h3 className="mt-3 text-2xl font-black text-emerald-300">ปราบบอสสำเร็จ!</h3>
+              <p className="mt-2 text-base text-emerald-200/80">
                 คุณเคลียร์ {dungeon.name} แล้ว — กลับไปจบบทเพื่อรับรางวัล
               </p>
               <button
                 onClick={onBossCleared}
-                className="mt-4 w-full rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 py-3 font-bold text-slate-950 transition hover:brightness-110"
+                className="mt-5 w-full rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 py-3.5 text-base font-bold text-slate-950 transition hover:brightness-110"
               >
                 ✅ กลับไปจบบทและรับรางวัล
               </button>
             </div>
           ) : inBossFight ? (
-            <div className="rounded-2xl border border-rose-800/60 bg-slate-900/70 p-4">
-              <p className="text-xs uppercase tracking-widest text-rose-400/80">
+            <div className="rounded-2xl border border-rose-800/60 bg-slate-900/70 p-5">
+              <p className="text-sm uppercase tracking-widest text-rose-400/80">
                 BOSS · เฟส {bossPhaseIdx + 1}/{Math.max(1, bossPhases.length)}
               </p>
-              <h3 className="mt-1 text-lg font-black text-rose-200">
+              <h3 className="mt-1 text-2xl font-black text-rose-200">
                 {currentRoom?.boss?.name ?? "ผู้พิทักษ์"}
               </h3>
               {bossPhases[bossPhaseIdx]?.name && (
-                <p className="text-xs text-rose-300/80">{bossPhases[bossPhaseIdx].name}</p>
+                <p className="text-sm text-rose-300/80">{bossPhases[bossPhaseIdx].name}</p>
               )}
 
               <div className="mt-3 overflow-hidden rounded-xl border border-slate-800">
@@ -415,7 +415,7 @@ export default function DungeonView({
               {bossFeedback ? (
                 <div className="mt-3 space-y-2">
                   <p
-                    className={`rounded-lg px-3 py-2 text-sm font-semibold ${
+                    className={`rounded-lg px-3 py-2.5 text-base font-semibold ${
                       bossFeedback.correct
                         ? "bg-emerald-950/60 text-emerald-300"
                         : "bg-rose-950/60 text-rose-300"
@@ -426,7 +426,7 @@ export default function DungeonView({
                       : `💥 ผิด! คุณเสียพลังชีวิต ${bossFeedback.player_damage}`}
                   </p>
                   {bossFeedback.explanation && (
-                    <p className="text-xs leading-relaxed text-slate-400">
+                    <p className="text-sm leading-relaxed text-slate-400">
                       {bossFeedback.explanation}
                     </p>
                   )}
@@ -441,7 +441,7 @@ export default function DungeonView({
                     <button
                       onClick={() => void loadBossQuestion()}
                       disabled={bossLoading}
-                      className="w-full rounded-xl bg-indigo-600 py-2.5 font-bold text-white transition hover:bg-indigo-500 disabled:opacity-50"
+                      className="w-full rounded-xl bg-indigo-600 py-3 text-base font-bold text-white transition hover:bg-indigo-500 disabled:opacity-50"
                     >
                       {bossLoading ? "กำลังเรียกคำถาม..." : "คำถามถัดไป →"}
                     </button>
@@ -449,7 +449,7 @@ export default function DungeonView({
                 </div>
               ) : bossQ ? (
                 <div className="mt-3">
-                  <p className="text-sm font-semibold leading-relaxed text-slate-100">
+                  <p className="text-base font-semibold leading-relaxed text-slate-100">
                     {bossQ.question}
                   </p>
                   <div className="mt-2 space-y-1.5">
@@ -458,7 +458,7 @@ export default function DungeonView({
                         key={i}
                         onClick={() => void handleAttack(i)}
                         disabled={bossBusy || chosen !== null}
-                        className={`w-full rounded-lg border px-3 py-2 text-left text-sm transition ${
+                        className={`w-full rounded-lg border px-3 py-2.5 text-left text-base transition ${
                           chosen === i
                             ? "border-indigo-400 bg-indigo-950/60 text-indigo-100"
                             : "border-slate-700 bg-slate-950/60 text-slate-200 hover:border-indigo-500"
@@ -488,15 +488,15 @@ export default function DungeonView({
               )}
             </div>
           ) : currentRoom ? (
-            <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
-              <p className="text-xs uppercase tracking-widest text-slate-500">
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
+              <p className="text-sm uppercase tracking-widest text-slate-500">
                 {ROOM_LABEL[currentRoom.type]} · {ROOM_ICON[currentRoom.type]}
               </p>
-              <h3 className="mt-1 text-lg font-bold text-slate-100">{currentRoom.name}</h3>
-              <p className="mt-2 text-sm leading-relaxed text-slate-400">{currentRoom.desc}</p>
+              <h3 className="mt-1 text-2xl font-bold text-slate-100">{currentRoom.name}</h3>
+              <p className="mt-2 text-base leading-relaxed text-slate-400">{currentRoom.desc}</p>
 
               {currentRoom.reward && (
-                <p className="mt-2 rounded-lg bg-amber-950/30 px-3 py-2 text-xs text-amber-300">
+                <p className="mt-2 rounded-lg bg-amber-950/30 px-3 py-2 text-sm text-amber-300">
                   🎁 {currentRoom.reward.icon} {currentRoom.reward.name}
                 </p>
               )}
@@ -504,12 +504,12 @@ export default function DungeonView({
               {currentRoom.type === "quiz" && pendingQuizIds.length > 0 ? (
                 <button
                   onClick={() => onEnterQuizRoom(currentRoom)}
-                  className="mt-3 w-full rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 py-3 font-bold text-white transition hover:from-indigo-500 hover:to-violet-500"
+                  className="mt-4 w-full rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 py-3.5 text-base font-bold text-white transition hover:from-indigo-500 hover:to-violet-500"
                 >
                   ❓ ตอบคำถามในห้องนี้ ({pendingQuizIds.length} ข้อ)
                 </button>
               ) : (
-                <div className="mt-3 space-y-1.5">
+                <div className="mt-4 space-y-2">
                   {currentRoom.doors.map((door) => {
                     const target = rooms.find((r) => r.id === door.to);
                     return (
@@ -517,7 +517,7 @@ export default function DungeonView({
                         key={`${door.to}-${door.label}`}
                         onClick={() => void handleEnter(door.to)}
                         disabled={door.locked || busy !== null}
-                        className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-sm transition ${
+                        className={`flex w-full items-center justify-between rounded-lg border px-3 py-2.5 text-base transition ${
                           door.locked
                             ? "cursor-not-allowed border-slate-800 bg-slate-950/40 text-slate-500"
                             : "border-slate-700 bg-slate-950/60 text-slate-200 hover:border-indigo-500"
@@ -526,7 +526,7 @@ export default function DungeonView({
                         <span>
                           {door.locked ? "🔒" : ROOM_ICON[target?.type ?? "npc"]} {door.label}
                         </span>
-                        <span className="text-xs text-slate-500">
+                        <span className="text-sm text-slate-500">
                           {door.locked ? door.requires_name ?? "ต้องมีกุญแจ" : target?.name}
                         </span>
                       </button>
@@ -536,14 +536,14 @@ export default function DungeonView({
               )}
 
               {currentRoom.type === "quiz" && pendingQuizIds.length === 0 && (
-                <p className="mt-2 text-xs text-emerald-400/80">
+                <p className="mt-3 text-sm text-emerald-400/80">
                   ✅ ตอบคำถามห้องนี้ครบแล้ว — เลือกประตูต่อไปได้
                 </p>
               )}
             </div>
           ) : null}
 
-          <p className="text-center text-[11px] leading-relaxed text-slate-600">
+          <p className="text-center text-xs leading-relaxed text-slate-600">
             ประตูที่มีกุญแจต้องสำรวจห้องสมบัติก่อน · ห้องโบนัสไม่บังคับ แต่ให้ไอเทมช่วยสู้บอส
           </p>
         </aside>
@@ -566,22 +566,22 @@ function DungeonShell({
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <div className="sticky top-0 z-40 border-b border-slate-800/70 bg-slate-950/90 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl items-center gap-3 px-4 py-2.5">
+        <div className="mx-auto flex max-w-[1440px] items-center gap-3 px-4 py-3">
           <button
             onClick={onExit}
-            className="shrink-0 rounded-lg border border-slate-700 px-2.5 py-1.5 text-sm text-slate-300 transition hover:border-indigo-500 hover:text-white"
+            className="shrink-0 rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 transition hover:border-indigo-500 hover:text-white"
           >
             ← <span className="hidden sm:inline">แผนที่โลก</span>
           </button>
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-bold leading-tight">
+            <p className="truncate text-base font-bold leading-tight">
               🗺️ {dungeonName || chapter.dungeon?.name || chapter.title}
             </p>
-            <p className="truncate text-[11px] text-slate-500">{chapter.title}</p>
+            <p className="truncate text-xs text-slate-500">{chapter.title}</p>
           </div>
         </div>
       </div>
-      <main className="mx-auto w-full max-w-6xl px-3 py-4 sm:px-4">{children}</main>
+      <main className="mx-auto w-full max-w-[1440px] px-3 py-5 sm:px-4">{children}</main>
     </div>
   );
 }
