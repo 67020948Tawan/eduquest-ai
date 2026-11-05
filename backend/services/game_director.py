@@ -391,7 +391,7 @@ def _normalize_dungeon_flavor(value: Any) -> Optional[dict]:
         "boss_name": text("boss_name"),
         "room_names": texts("room_names", 8),
         "lore": texts("lore", 8),
-        "boss_phase_names": texts("boss_phase_names", 4),
+        "boss_phase_names": texts("boss_phase_names", 6),
         "trap_name": text("trap_name", 60),
     }
     if not any(flavor.values()):
@@ -898,7 +898,7 @@ Visual Style ของเกม: {style_hint} (ใช้กำหนดโทน
 9. ผสมประเภทคำถามให้หลากหลายในแต่ละบท ตามที่อนุญาตไว้ข้างต้น
 10. ทุก chapter ต้องมี field "dungeon" (ใช้แต่งบรรยากาศดันเจี้ยน — โครงสร้างดันเจี้ยนระบบสร้างเอง):
    {{"name": "ชื่อดันเจี้ยนของบทนี้", "room_names": ["ชื่อห้อง 8 ชื่อ สั้น ๆ"], "lore": ["คำบรรยายห้องละ 1-2 ประโยค 8 ข้อ"],
-     "key_name": "ชื่อกุญแจประจำบท", "boss_name": "ชื่อบอสประจำบท", "boss_phase_names": ["ชื่อเฟส 2-3 ชื่อ"],
+     "key_name": "ชื่อกุญแจประจำบท", "boss_name": "ชื่อบอสประจำบท", "boss_phase_names": ["ชื่อเฟส 4-6 ชื่อ"],
      "trap_name": "ชื่อห้องกับดัก (ต้องไม่ใช่ชื่อวิญญาณผู้เฒ่า)"}}
    - ต้องเป็นภาษา{language_rule} และอิงเนื้อหาบทนั้นจริง ห้ามใช้คำซ้ำกันทุกบท"""
 
