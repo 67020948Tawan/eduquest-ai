@@ -10,6 +10,7 @@ import DialogueBox, { type DialogueNpc } from "@/components/game/DialogueBox";
 import WorldMapView, { type MapNode } from "@/components/game/WorldMapView";
 import DungeonView from "@/components/game/DungeonView";
 import WheelPanel, { type WheelWedge } from "@/components/game/WheelPanel";
+import ThemeToggle from "@/components/ThemeToggle";
 import { useAuthToken } from "@/lib/useAuthToken";
 import {
   getCourseStructure,
@@ -455,6 +456,11 @@ function CoursePlayInner() {
   const hasBase = modes.includes("base_building");
   const hasRpg = modes.includes("rpg_lore");
   const hasWheel = modes.includes("wheel");
+
+  // ปุ่มสลับธีม — guest ไม่มี SiteHeader จึงวางมุมล่างขวาของจอเกมให้ (ผู้สอนกดที่ header ได้)
+  const themeToggleNode = isGuest ? (
+    <ThemeToggle className="!fixed bottom-4 right-4 z-[80] shadow-lg" />
+  ) : null;
 
   // refs สำหรับ combat (อ่านค่าล่าสุดใน async callback ได้)
   const enemyHpRef = useRef(0);
@@ -1408,6 +1414,7 @@ function CoursePlayInner() {
           </div>
         ))}
       </div>
+      {themeToggleNode}
 
       {/* Slim sticky HUD — แถบเดียวจบ: กลับแผนที่ · ชื่อด่าน · HP/XP/combo */}
       <div className={`${isGuest ? "top-0" : "top-16"} sticky z-40 border-b border-slate-800/60 bg-slate-950/90 backdrop-blur`}>
@@ -1415,7 +1422,7 @@ function CoursePlayInner() {
           <button
             onClick={() => (dungeonQuiz ? backToDungeon() : setScreen("map"))}
             aria-label={dungeonQuiz ? "กลับดันเจี้ยน" : "กลับแผนที่"}
-            className="shrink-0 rounded-lg border border-slate-700 px-2.5 py-1.5 text-slate-300 transition hover:border-indigo-500 hover:text-white"
+            className="shrink-0 rounded-lg border border-slate-700 px-2.5 py-1.5 text-slate-300 transition hover:border-indigo-500 hover:text-slate-50"
           >
             ← <span className="hidden sm:inline">{dungeonQuiz ? "Dungeon" : "Map"}</span>
           </button>

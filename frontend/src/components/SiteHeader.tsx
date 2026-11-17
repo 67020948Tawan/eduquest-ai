@@ -8,6 +8,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuthToken } from "@/lib/useAuthToken";
 import { getCachedUser, logout, type CurrentUser } from "@/lib/api";
+import ThemeToggle from "@/components/ThemeToggle";
 
 export default function SiteHeader() {
   const router = useRouter();
@@ -24,7 +25,7 @@ export default function SiteHeader() {
   return (
     <header className="sticky top-0 z-50 border-b border-slate-800/60 bg-slate-950/80 backdrop-blur">
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-2 px-4 sm:px-6">
-        <Link href="/" className="flex shrink-0 items-center gap-2 text-base font-bold text-white sm:text-lg">
+        <Link href="/" className="flex shrink-0 items-center gap-2 text-base font-bold text-slate-50 sm:text-lg">
           <span className="grid h-8 w-8 place-items-center rounded-lg bg-gradient-to-br from-indigo-500 to-fuchsia-500">
             🎓
           </span>
@@ -32,11 +33,12 @@ export default function SiteHeader() {
         </Link>
 
         <nav className="flex items-center gap-1.5 sm:gap-3">
+          <ThemeToggle />
           {token && user ? (
             <>
               <Link
                 href="/dashboard"
-                className="whitespace-nowrap rounded-lg px-2.5 py-2 text-xs font-medium text-slate-300 transition hover:text-white sm:px-4 sm:text-sm"
+                className="whitespace-nowrap rounded-lg px-2.5 py-2 text-xs font-medium text-slate-300 transition hover:text-slate-50 sm:px-4 sm:text-sm"
               >
                 เกมของฉัน
               </Link>
@@ -58,7 +60,7 @@ export default function SiteHeader() {
             <>
               <Link
                 href="/login"
-                className="whitespace-nowrap rounded-lg px-2.5 py-2 text-xs font-medium text-slate-300 transition hover:text-white sm:px-4 sm:text-sm"
+                className="whitespace-nowrap rounded-lg px-2.5 py-2 text-xs font-medium text-slate-300 transition hover:text-slate-50 sm:px-4 sm:text-sm"
               >
                 เข้าสู่ระบบ
               </Link>

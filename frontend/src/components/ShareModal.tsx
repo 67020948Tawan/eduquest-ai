@@ -74,11 +74,11 @@ export default function ShareModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between">
-          <h3 className="text-lg font-bold text-white">🔗 Share your game</h3>
+          <h3 className="text-lg font-bold text-slate-50">🔗 Share your game</h3>
           <button
             onClick={onClose}
             aria-label="ปิด"
-            className="rounded-lg px-2.5 py-1 text-slate-400 transition hover:bg-slate-800 hover:text-white"
+            className="rounded-lg px-2.5 py-1 text-slate-400 transition hover:bg-slate-800 hover:text-slate-50"
           >
             ✕
           </button>
@@ -138,7 +138,7 @@ export default function ShareModal({
               download={`${title}-qr.png`}
               target="_blank"
               rel="noreferrer"
-              className="rounded-lg border border-slate-700 px-3 py-2 text-center text-sm font-medium text-slate-300 transition hover:border-slate-500 hover:text-white"
+              className="rounded-lg border border-slate-700 px-3 py-2 text-center text-sm font-medium text-slate-300 transition hover:border-slate-500 hover:text-slate-50"
             >
               ⬇ Download QR
             </a>

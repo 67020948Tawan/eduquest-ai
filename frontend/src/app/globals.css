@@ -3,6 +3,13 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+
+  /* ---- โหมดกลางคืน (ค่าเริ่มต้น): เพิ่มความสว่างของเทากลางให้ตัวหนังสือเล็กอ่านง่ายขึ้น ----
+     (เดิม slate-400/500/600 มืดเกินไปบนพื้น slate-950 จนอ่านยาก) */
+  --color-slate-400: #a7b4c7;
+  --color-slate-500: #8e9db2;
+  --color-slate-600: #77879d;
+  color-scheme: dark;
 }
 
 @theme inline {
@@ -12,18 +19,138 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* ==============================================================================
+   โหมดกลางวัน ([data-theme="light"]) — พลิกพาเลตสีทั้งระบบโดยไม่ต้องแก้ทุกหน้า
+   หลักการ: พลิกค่าตัวแปร palette ของ Tailwind v4 (ใช้ใน utility ทุกแบบ รวมตัวที่มี
+   opacity เช่น bg-slate-950/70) + override เฉพาะจุดที่พลิกแล้วชนกัน (เช่น
+   text-สีสดบนปุ่มไล่เฉด ซึ่งต้องคงสีสดไว้)
+   ============================================================================== */
+[data-theme="light"] {
+  color-scheme: light;
+  --background: #ffffff;
+  --foreground: #171717;
+
+  /* ---- เทาหลัก: พื้นหลัง → สว่าง, ตัวหนังสือ → เข้ม ---- */
+  --color-slate-950: #eef2f8;
+  --color-slate-900: #f8fafd;
+  --color-slate-800: #e2e8f0;
+  --color-slate-700: #c6d0de;
+  --color-slate-600: #94a3b8;
+  --color-slate-500: #5c6b80;
+  --color-slate-400: #3f4f66;
+  --color-slate-300: #293548;
+  --color-slate-200: #1b2637;
+  --color-slate-100: #101a2b;
+  --color-slate-50: #0b1421;
+
+  /* ---- โทนอินดิโก้/ม่วง ---- */
+  --color-indigo-950: #e0e7ff;
+  --color-indigo-900: #c7d2fe;
+  --color-violet-950: #ede9fe;
+  --color-violet-900: #ddd6fe;
+  --color-purple-950: #f3e8ff;
+  --color-purple-900: #e9d5ff;
+  --color-fuchsia-950: #fae8ff;
+  --color-fuchsia-900: #f5d0fe;
+
+  /* ---- โทนอบอุ่น (เหลือง/ส้ม/แดง) ---- */
+  --color-amber-950: #fef3c7;
+  --color-amber-900: #fde68a;
+  --color-orange-950: #ffedd5;
+  --color-orange-900: #fed7aa;
+  --color-yellow-950: #fef9c3;
+  --color-yellow-900: #fef08a;
+  --color-rose-950: #ffe4e6;
+  --color-rose-900: #fecdd3;
+  --color-red-950: #fee2e2;
+  --color-red-900: #fecaca;
+
+  /* ---- โทนเขียว/ฟ้า ---- */
+  --color-emerald-950: #d1fae5;
+  --color-emerald-900: #a7f3d0;
+  --color-green-950: #dcfce7;
+  --color-green-900: #bbf7d0;
+  --color-lime-950: #ecfccb;
+  --color-lime-900: #d9f99d;
+  --color-teal-950: #ccfbf1;
+  --color-teal-900: #99f6e4;
+  --color-cyan-950: #cffafe;
+  --color-cyan-900: #a5f3fc;
+  --color-sky-950: #e0f2fe;
+  --color-sky-900: #bae6fd;
+  --color-blue-950: #dbeafe;
+  --color-blue-900: #bfdbfe;
+
+  /* ---- สีสดระดับ 200/300 (ปกติเป็นตัวหนังสือ/ขอบสว่างบนพื้นมืด) → เข้มลงให้อ่านได้บนพื้นขาว ----
+     (ไม่แตะ 400+ เพราะถูกใช้เป็นพื้นปุ่ม/ไล่เฉด เช่น from-amber-400) */
+  --color-amber-300: #b45309;
+  --color-amber-200: #92400e;
+  --color-orange-300: #c2410c;
+  --color-orange-200: #9a3412;
+  --color-yellow-300: #a16207;
+  --color-yellow-200: #854d0e;
+  --color-lime-300: #4d7c0f;
+  --color-lime-200: #3f6212;
+  --color-emerald-300: #047857;
+  --color-emerald-200: #065f46;
+  --color-green-300: #15803d;
+  --color-green-200: #166534;
+  --color-teal-300: #0f766e;
+  --color-teal-200: #115e59;
+  --color-cyan-300: #0e7490;
+  --color-cyan-200: #155e75;
+  --color-sky-300: #0369a1;
+  --color-sky-200: #075985;
+  --color-blue-300: #1d4ed8;
+  --color-blue-200: #1e40af;
+  --color-indigo-300: #4338ca;
+  --color-indigo-200: #3730a3;
+  --color-violet-300: #6d28d9;
+  --color-violet-200: #5b21b6;
+  --color-purple-300: #7e22ce;
+  --color-purple-200: #6b21a8;
+  --color-fuchsia-300: #a21caf;
+  --color-fuchsia-200: #86198f;
+  --color-pink-300: #be185d;
+  --color-pink-200: #9d174d;
+  --color-rose-300: #be123c;
+  --color-rose-200: #9f1239;
+  --color-red-300: #b91c1c;
+  --color-red-200: #991b1b;
 }
+
+/* ตัวหนังสือสี 400 — ใช้เป็นตัวหนังสือบนพื้นสว่าง ต้องเข้มขึ้น (คงค่า palette เดิมไว้
+   สำหรับ bg-/border-/from- ที่ยังใช้สีสดได้สวยบนพื้นขาว) */
+[data-theme="light"] .text-amber-400 { color: #9a5b0b; }
+[data-theme="light"] .text-orange-400 { color: #c2410c; }
+[data-theme="light"] .text-emerald-400 { color: #059669; }
+[data-theme="light"] .text-teal-400 { color: #0d9488; }
+[data-theme="light"] .text-cyan-400 { color: #0891b2; }
+[data-theme="light"] .text-sky-400 { color: #0284c7; }
+[data-theme="light"] .text-blue-400 { color: #2563eb; }
+[data-theme="light"] .text-indigo-400 { color: #4f46e5; }
+[data-theme="light"] .text-violet-400 { color: #7c3aed; }
+[data-theme="light"] .text-purple-400 { color: #9333ea; }
+[data-theme="light"] .text-fuchsia-400 { color: #c026d3; }
+[data-theme="light"] .text-pink-400 { color: #db2777; }
+[data-theme="light"] .text-rose-400 { color: #e11d48; }
+[data-theme="light"] .text-red-400 { color: #dc2626; }
+[data-theme="light"] .text-lime-400 { color: #65a30d; }
+[data-theme="light"] .text-green-400 { color: #16a34a; }
+[data-theme="light"] .text-yellow-400 { color: #a16207; }
+
+/* ตัวแปร slate-950 พลิกเป็นสว่างเพื่อทำพื้นหลัง — แต่ตอนใช้เป็น "ตัวหนังสือ"
+   (บนปุ่มไล่เฉดสีสด เช่น ปุ่มหมุนวงล้อ) ต้องยังเป็นสีเข้ม */
+[data-theme="light"] .text-slate-950 { color: #0b1421; }
 
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+  line-height: 1.65; /* ภาษาไทยมีสระบน-ล่าง — เว้นระยะให้พอ ไม่ให้ตัดกันอ่านยาก */
+  transition: background-color 0.25s ease, color 0.25s ease;
 }
+
 
 /* ---- EduQuest game animations ---- */
 @keyframes eq-shake {

@@ -569,7 +569,7 @@ function DungeonShell({
         <div className="mx-auto flex max-w-[1440px] items-center gap-3 px-4 py-3">
           <button
             onClick={onExit}
-            className="shrink-0 rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 transition hover:border-indigo-500 hover:text-white"
+            className="shrink-0 rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 transition hover:border-indigo-500 hover:text-slate-50"
           >
             ← <span className="hidden sm:inline">แผนที่โลก</span>
           </button>

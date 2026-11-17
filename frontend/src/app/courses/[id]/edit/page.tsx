@@ -301,7 +301,7 @@ export default function CourseEditorPage() {
                 <p className="text-[11px] font-bold uppercase tracking-[0.22em] text-indigo-300/80">
                   Course workspace
                 </p>
-                <h1 className="mt-1 text-2xl font-black tracking-tight text-white sm:text-3xl">
+                <h1 className="mt-1 text-2xl font-black tracking-tight text-slate-50 sm:text-3xl">
                   แก้ไขเนื้อหา
                 </h1>
                 <p className="mt-1 max-w-2xl truncate text-sm text-slate-300">
@@ -381,7 +381,7 @@ export default function CourseEditorPage() {
                   </span>
                   {stat.label}
                 </p>
-                <p className="mt-1.5 text-xl font-black text-white">{stat.value}</p>
+                <p className="mt-1.5 text-xl font-black text-slate-50">{stat.value}</p>
               </div>
             ))}
           </div>
@@ -426,7 +426,7 @@ export default function CourseEditorPage() {
               <div className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/60 shadow-xl shadow-slate-950/20">
                 <div className="border-b border-slate-800 bg-slate-900/70 px-5 py-4">
                   <div className="flex items-center justify-between gap-2">
-                    <h2 className="text-sm font-bold text-white">ความพร้อมของคอร์ส</h2>
+                    <h2 className="text-sm font-bold text-slate-50">ความพร้อมของคอร์ส</h2>
                     <span
                       className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${
                         readiness === 100
@@ -517,7 +517,7 @@ export default function CourseEditorPage() {
                   </Link>
                   <Link
                     href="/dashboard"
-                    className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2 text-xs text-slate-300 transition hover:border-slate-600 hover:text-white"
+                    className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2 text-xs text-slate-300 transition hover:border-slate-600 hover:text-slate-50"
                   >
                     <span>← กลับ Dashboard</span>
                     <span aria-hidden="true">→</span>
@@ -537,7 +537,7 @@ export default function CourseEditorPage() {
                       1
                     </span>
                     <div>
-                      <h2 className="font-bold text-white">ข้อมูลคอร์ส</h2>
+                      <h2 className="font-bold text-slate-50">ข้อมูลคอร์ส</h2>
                       <p className="mt-0.5 text-xs text-slate-500">ชื่อ คำอธิบาย และรูปแบบการเล่น</p>
                     </div>
                   </div>
@@ -665,7 +665,7 @@ export default function CourseEditorPage() {
                       2
                     </span>
                     <div>
-                      <h2 className="text-lg font-bold text-white">เนื้อหาและคำถาม</h2>
+                      <h2 className="text-lg font-bold text-slate-50">เนื้อหาและคำถาม</h2>
                       <p className="mt-0.5 text-xs text-slate-500">
                         {data.chapters.length} Chapter · {totalQuestions} คำถาม
                       </p>
@@ -827,7 +827,7 @@ function ChapterEditor({
               onMove(chapter, -1);
             }}
             disabled={index === 0}
-            className="grid h-7 w-7 place-items-center rounded-lg border border-slate-700 text-xs text-slate-300 transition hover:border-slate-500 hover:text-white disabled:opacity-30"
+            className="grid h-7 w-7 place-items-center rounded-lg border border-slate-700 text-xs text-slate-300 transition hover:border-slate-500 hover:text-slate-50 disabled:opacity-30"
           >
             ↑
           </button>
@@ -840,7 +840,7 @@ function ChapterEditor({
               onMove(chapter, 1);
             }}
             disabled={index === total - 1}
-            className="grid h-7 w-7 place-items-center rounded-lg border border-slate-700 text-xs text-slate-300 transition hover:border-slate-500 hover:text-white disabled:opacity-30"
+            className="grid h-7 w-7 place-items-center rounded-lg border border-slate-700 text-xs text-slate-300 transition hover:border-slate-500 hover:text-slate-50 disabled:opacity-30"
           >
             ↓
           </button>
@@ -976,7 +976,7 @@ function ChapterEditor({
                       setEditingId(editingId === question.id ? null : question.id);
                       setAdding(false);
                     }}
-                    className="rounded-lg border border-slate-700 px-2 py-1 text-xs text-slate-300 transition hover:border-slate-500 hover:text-white"
+                    className="rounded-lg border border-slate-700 px-2 py-1 text-xs text-slate-300 transition hover:border-slate-500 hover:text-slate-50"
                   >
                     {editingId === question.id ? "ปิด" : "แก้ไข"}
                   </button>

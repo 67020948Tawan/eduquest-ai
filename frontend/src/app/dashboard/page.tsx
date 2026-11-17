@@ -274,7 +274,7 @@ export default function DashboardPage() {
                     <button
                       onClick={() => handleArchiveToggle(course)}
                       disabled={archivingId === course.id}
-                      className="rounded-lg border border-slate-700 py-2 text-xs font-bold text-slate-300 transition hover:border-slate-500 hover:text-white disabled:opacity-50"
+                      className="rounded-lg border border-slate-700 py-2 text-xs font-bold text-slate-300 transition hover:border-slate-500 hover:text-slate-50 disabled:opacity-50"
                     >
                       {archivingId === course.id
                         ? "..."
@@ -284,7 +284,7 @@ export default function DashboardPage() {
                     </button>
                     <Link
                       href={`/courses/${course.id}/leaderboard`}
-                      className="rounded-lg border border-slate-700 py-2 text-center text-xs font-bold text-slate-300 transition hover:border-slate-500 hover:text-white"
+                      className="rounded-lg border border-slate-700 py-2 text-center text-xs font-bold text-slate-300 transition hover:border-slate-500 hover:text-slate-50"
                     >
                       🏆 อันดับ
                     </Link>

@@ -118,7 +118,7 @@ export default function CourseReportPage() {
                   <p className="text-sm text-slate-400">
                     {card.icon} {card.label}
                   </p>
-                  <p className="mt-1 text-2xl font-bold text-white">{card.value}</p>
+                  <p className="mt-1 text-2xl font-bold text-slate-50">{card.value}</p>
                 </div>
               ))}
             </div>

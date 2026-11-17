@@ -127,7 +127,7 @@ function LoginInner() {
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="ครูสมหวัง"
-                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-indigo-500"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-slate-50 outline-none transition placeholder:text-slate-600 focus:border-indigo-500"
                 />
               </div>
             )}
@@ -139,7 +139,7 @@ function LoginInner() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="teacher@school.ac.th"
-                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-indigo-500"
+                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-slate-50 outline-none transition placeholder:text-slate-600 focus:border-indigo-500"
               />
             </div>
             <div>
@@ -151,7 +151,7 @@ function LoginInner() {
                 onChange={(e) => setPassword(e.target.value)}
                 minLength={6}
                 placeholder="อย่างน้อย 6 ตัวอักษร"
-                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-indigo-500"
+                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-slate-50 outline-none transition placeholder:text-slate-600 focus:border-indigo-500"
               />
             </div>
 

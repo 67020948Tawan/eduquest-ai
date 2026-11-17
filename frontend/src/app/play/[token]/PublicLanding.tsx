@@ -6,6 +6,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { PixelScene, PixelSprite } from "@/components/PixelArt";
+import ThemeToggle from "@/components/ThemeToggle";
 import {
   getPublicCourse,
   getPublicLeaderboard,
@@ -112,6 +113,8 @@ function LandingBody({
 
   return (
     <div className="flex min-h-screen flex-col bg-slate-950 text-slate-100">
+      {/* ปุ่มสลับธีมกลางวัน/กลางคืน — มุมล่างขวา */}
+      <ThemeToggle className="!fixed bottom-4 right-4 z-[80] shadow-lg" />
       {/* Cover */}
       <div className="relative border-b border-slate-800/60">
         <PixelScene

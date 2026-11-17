@@ -1074,7 +1074,7 @@ export function BattleStage({
         </div>
 
         {/* VS badge */}
-        <div className="absolute left-1/2 top-3 -translate-x-1/2 rounded-full border border-white/20 bg-slate-950/60 px-4 py-1 text-xs font-black tracking-widest text-white/90 backdrop-blur-sm">
+        <div className="absolute left-1/2 top-3 -translate-x-1/2 rounded-full border border-white/20 bg-black/50 px-4 py-1 text-xs font-black tracking-widest text-white/90 backdrop-blur-sm">
           ⚔️ BATTLE
         </div>
 
