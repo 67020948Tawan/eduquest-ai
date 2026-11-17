@@ -18,6 +18,7 @@ const MODE_LABELS: Record<string, string> = {
   rpg_lore: "📜 RPG",
   turn_based: "⚔️ Combat",
   base_building: "🏰 Base Building",
+  wheel: "🎡 Wheel",
 };
 
 export default function PublicLanding() {

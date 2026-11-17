@@ -1689,8 +1689,11 @@ async def raid_defense_question(
     current_user: User = Depends(get_player),
     db: AsyncSession = Depends(get_db),
 ):
-    """สุ่มคำถามจากคอร์สมาเป็นบทขับไล่ (ไม่เผยคำตอบ)"""
+    """สุ่มคำถามจากคอร์สมาเป็นบทขับไล่ (ไม่เผยคำตอบ) — เลี่ยงคำถามที่เพิ่งถามไป"""
     session = await _get_own_session(session_id, current_user, db)
+    modes = await _course_modes(db, session.course_id)
+    state = _ensure_state(session, modes)
+
     chapter_ids = list(
         (
             await db.execute(select(Chapter.id).where(Chapter.course_id == session.course_id))
@@ -1706,7 +1709,19 @@ async def raid_defense_question(
     if not questions:
         raise HTTPException(status_code=404, detail="ไม่มีคำถามในคอร์สนี้")
 
-    q = _random.choice(questions)
+    # เลี่ยงคำถามที่เพิ่งโผล่ไป (เก็บรอบล่าสุดไว้ใน game_state["raid_seen"])
+    seen = set()
+    for value in state.get("raid_seen") or []:
+        try:
+            seen.add(int(value))
+        except (TypeError, ValueError):
+            continue
+    fresh = [q for q in questions if q.id not in seen]
+    q = _random.choice(fresh or questions)
+    order = list(seen) + [q.id]
+    state["raid_seen"] = order[-15:]
+    db.commit()
+
     return {
         "question_id": q.id,
         "question": q.question,

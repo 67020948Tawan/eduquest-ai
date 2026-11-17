@@ -22,6 +22,7 @@ const GAME_MODE_LABELS: Record<string, string> = {
   rpg_lore: "ผจญภัย RPG",
   turn_based: "ต่อสู้ผลัดกัน",
   base_building: "สร้างฐาน",
+  wheel: "วงล้อสุ่มคำถาม",
 };
 
 export function gameModeLabel(mode: string): string {

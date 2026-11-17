@@ -396,6 +396,16 @@ def sanitize_game_state(state: dict) -> dict:
         item = ITEMS.get(key or "")
         equipped[slot] = key if item and item["type"] == slot else None
 
+    # คำถาม raid ที่เพิ่งถามไป (ใช้เลี่ยงการสุ่มเจอข้อเดิมซ้ำ ๆ)
+    raid_seen: list[int] = []
+    for value in (state.get("raid_seen") or [])[:15]:
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            continue
+        if number not in raid_seen:
+            raid_seen.append(number)
+
     dungeon = sanitize_dungeon_state(state.get("dungeon"))
     dungeons = sanitize_dungeon_store(state.get("dungeons"))
     # เติมจากตัว active เผื่อ state รุ่นก่อนมีแค่ "dungeon"
@@ -417,6 +427,7 @@ def sanitize_game_state(state: dict) -> dict:
         "resources": resources,
         "buildings": buildings,
         "equipped": equipped,
+        "raid_seen": raid_seen,
         "dungeon": dungeon,
         "dungeons": dungeons,
     }

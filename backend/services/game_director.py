@@ -12,7 +12,9 @@
 # ==============================================================================
 
 import json
+import os
 import random
+import re
 import traceback
 from collections import Counter
 from typing import Any, Optional
@@ -23,7 +25,10 @@ from schemas.generation import CourseGenerationAI, ContentSufficiencyAI, QuizQue
 from services.ai_provider import get_ai_provider, AIProviderError
 from services.extractors import extract_text, ExtractionError
 
-MAX_SOURCE_CHARS = 24000
+# ปลดลิมิตความยาวเนื้อหา — ค่า default เดิม 24000 ตัดเอกสารยาวทิ้งเกือบหมด
+# ตอนนี้ขยายใหญ่มาก (เกินได้ด้วย env MAX_SOURCE_CHARS) และถ้ายังเกินจะเก็บทั้ง "หัว+ท้าย"
+# ของเอกสารแทนการตัดทิ้งทั้งหมด
+MAX_SOURCE_CHARS = max(4000, int(os.getenv("MAX_SOURCE_CHARS", "100000")))
 
 # ------------------------------------------------------------------------------
 # Game Length Config — จำนวนบทและคำถามต่อบทตามความยาวที่เลือก
@@ -75,8 +80,18 @@ def _language_matches(text: str, expected: str) -> bool:
 
 
 def _read_source(file_path: str) -> str:
-    """อ่านไฟล์ผ่าน Extraction Layer (รองรับ PDF/DOCX/PPTX/TXT จริง)"""
-    return extract_text(file_path)[:MAX_SOURCE_CHARS]
+    """อ่านไฟล์ผ่าน Extraction Layer (รองรับ PDF/DOCX/PPTX/TXT จริง)
+
+    เอกสารยาวมาก: เก็บหัว + ท้าย (70%/30%) แทนการตัดทิ้งทั้งหมด — คำถามมักโผล่ทั้งต้นและปลายเอกสาร
+    """
+    text = extract_text(file_path)
+    limit = MAX_SOURCE_CHARS
+    if len(text) <= limit:
+        return text
+    note = "\n\n[... เนื้อหาส่วนกลางถูกย่อเพื่อให้พอดีบริบทของ AI — ต้นและท้ายเอกสารครบถ้วน ...]\n\n"
+    head = text[: int(limit * 0.7)]
+    tail = text[-int(limit * 0.3):]
+    return head + note + tail
 
 
 # ------------------------------------------------------------------------------
@@ -401,6 +416,17 @@ def _normalize_dungeon_flavor(value: Any) -> Optional[dict]:
 
 def _normalize_ai_payload(raw: Any) -> Any:
     """normalize คำถามทุกข้อก่อน model_validate (กัน ValidationError ทำให้งานล้มทั้งใบ)"""
+def _question_key(q: dict) -> str:
+    """คีย์สำหรับเทียบคำถามซ้ำ — ตัดช่องว่าง/วรรณยุกต์/ตัวพิมพ์ออก"""
+    text = str(q.get("question") or "")
+    text = re.sub(r"\s+", "", text)
+    return text.translate(str.maketrans("", "", "่้็๋ํ์ัิีึืุูๆำ….,!?;:()[]{}\"'-_")).lower()
+
+
+def _normalize_ai_payload(raw: Any) -> Any:
+    """normalize คำถามทุกข้อก่อน model_validate (กัน ValidationError ทำให้งานล้มทั้งใบ)
+    + ตัดคำถามที่ถามเรื่องเดียวกันซ้ำภายในบทเดียวกันออก (AI มักสร้างซ้ำ)
+    """
     if not isinstance(raw, dict):
         return raw
 
@@ -420,6 +446,22 @@ def _normalize_ai_payload(raw: Any) -> Any:
             for nq in (_normalize_question(q) for q in (questions if isinstance(questions, list) else []))
             if nq is not None
         ]
+        # ---- dedupe: คำถามข้อความเดียวกันในบทเดียวกัน เอาไว้ข้อเดียว ----
+        seen_texts: set[str] = set()
+        deduped = []
+        for q in normalized:
+            key = _question_key(q)
+            if key and key in seen_texts:
+                continue
+            if key:
+                seen_texts.add(key)
+            deduped.append(q)
+        dropped = len(normalized) - len(deduped)
+        normalized = deduped
+        if dropped:
+            print(
+                f"⚠️ [GameDirector] บท '{ch.get('title')}' ตัดคำถามซ้ำออก {dropped} ข้อ"
+            )
         if not normalized:
             fallback = _fallback_question(ch)
             if not fallback:
@@ -585,6 +627,14 @@ async def _ensure_question_type_coverage(
             continue
 
         chapter = chapters[idx]
+        # กันคำถามซ้ำ — ข้ามข้อที่ถามเรื่องเดียวกับข้อที่มีอยู่แล้วในบทเดียวกัน
+        existing_keys = {_question_key(q.model_dump()) for q in chapter.quiz_questions}
+        if _question_key(question) in existing_keys:
+            print(
+                f"⚠️ [GameDirector] ข้ามคำถามเสริมซ้ำ (chapter {idx}, {expected_type})"
+            )
+            continue
+
         if chapter.quiz_questions and idx not in filled_chapters:
             # แทนข้อสุดท้าย → จำนวนข้อต่อบทเท่าเดิม แต่ได้ประเภทที่ขาด
             chapter.quiz_questions[-1] = question
@@ -790,6 +840,8 @@ GAME_MODE_INSTRUCTIONS = {
     "base_building": """- [BASE BUILDING]: explanation ต้องสรุปรางวัลทรัพยากรที่ได้ เช่น 'ได้รับ ไม้กลายพันธุ์ x50, Blueprint หอสังเกตการณ์'
   รางวัลสอดคล้องความยากของเนื้อหา""",
     "standard_quiz": """- [STANDARD QUIZ]: คำถามวัดความเข้าใจเชิงวิเคราะห์จากสถานการณ์จริง ไม่ใช่แค่ท่องจำ""",
+    "wheel": """- [SPINNING WHEEL]: ผู้เล่นหมุนวงล้อแล้วได้คำถามสุ่ม — ผสมความยากให้หมุนแล้วตื่นเต้น
+  มีทั้งข้อง่าย (ตรวจความเข้าใจพื้นฐาน) และข้อท้าทาย (วิเคราะห์/ประยุกต์ใช้) · options ต้องชัดเจน กลวง ๆ ไม่คลุมเครือ""",
 }
 
 VISUAL_STYLE_HINTS = {
@@ -900,7 +952,13 @@ Visual Style ของเกม: {style_hint} (ใช้กำหนดโทน
    {{"name": "ชื่อดันเจี้ยนของบทนี้", "room_names": ["ชื่อห้อง 8 ชื่อ สั้น ๆ"], "lore": ["คำบรรยายห้องละ 1-2 ประโยค 8 ข้อ"],
      "key_name": "ชื่อกุญแจประจำบท", "boss_name": "ชื่อบอสประจำบท", "boss_phase_names": ["ชื่อเฟส 4-6 ชื่อ"],
      "trap_name": "ชื่อห้องกับดัก (ต้องไม่ใช่ชื่อวิญญาณผู้เฒ่า)"}}
-   - ต้องเป็นภาษา{language_rule} และอิงเนื้อหาบทนั้นจริง ห้ามใช้คำซ้ำกันทุกบท"""
+   - ต้องเป็นภาษา{language_rule} และอิงเนื้อหาบทนั้นจริง ห้ามใช้คำซ้ำกันทุกบท
+11. คุณภาพและความหลากหลายของคำถาม (สำคัญมาก):
+   - แต่ละบท: คำถามทุกข้อต้องถาม "แนวคิด/ประเด็นต่างกัน" ห้ามถามเรื่องเดียวกันซ้ำ 2 ข้อ
+   - question: เขียนเป็นสถานการณ์/โจทย์จริง 1-3 ประโยค ให้บริบทพออ่านแล้วตอบได้ ไม่ใช่คำถามสั้น ๆ ครึ่งประโยค
+   - explanation: อธิบายเฉลย 2-3 ประโยค — บอกว่าทำไมถูก/ทำไมตัวเลือกอื่นผิด โดยอิงเนื้อหาจริง
+   - ผสมระดับความยาก easy/medium/hard ให้หลากหลายในแต่ละบท และ options ต้องดูน่าเชื่อพอกัน ไม่มีข้อจอกประจำ
+12. ห้ามสร้างคำถามที่มีข้อความซ้ำกันแบบเป๊ะ ๆ (ตรวจซ้ำก่อนส่ง — ถ้าซ้ำให้เปลี่ยนเป็นแนวคิดอื่นในบทแทน)"""
 
     try:
         # Retry สูงสุด 3 รอบ:

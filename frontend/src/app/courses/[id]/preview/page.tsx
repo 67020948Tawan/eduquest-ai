@@ -9,6 +9,7 @@ import BasePanel from "@/components/game/BasePanel";
 import DialogueBox, { type DialogueNpc } from "@/components/game/DialogueBox";
 import WorldMapView, { type MapNode } from "@/components/game/WorldMapView";
 import DungeonView from "@/components/game/DungeonView";
+import WheelPanel, { type WheelWedge } from "@/components/game/WheelPanel";
 import { useAuthToken } from "@/lib/useAuthToken";
 import {
   getCourseStructure,
@@ -39,6 +40,32 @@ import {
 } from "@/lib/api";
 
 type Screen = "map" | "chapter" | "result" | "dungeon";
+
+// ---- Wheel mode: ช่องของวงล้อ (เลือกช่องจากลักษณะคำถามที่วงล้อหยุดจริง) ----
+const WHEEL_WEDGES: WheelWedge[] = [
+  { emoji: "🔘", label: "เลือกข้อ", color: "#4338ca" },
+  { emoji: "⭐", label: "โจทย์ยาก", color: "#b45309" },
+  { emoji: "✅", label: "จริง/เท็จ", color: "#15803d" },
+  { emoji: "🎁", label: "คะแนนสูง", color: "#a21caf" },
+  { emoji: "🔗", label: "จับคู่", color: "#0e7490" },
+  { emoji: "⚡", label: "คำถามทั่วไป", color: "#be123c" },
+  { emoji: "🔢", label: "เรียงลำดับ", color: "#4d7c0f" },
+  { emoji: "💎", label: "สุ่มพิเศษ", color: "#6d28d9" },
+];
+
+function wheelWedgeFor(q: ChapterView["quiz_questions"][number]): number {
+  const t = q.question_type;
+  const difficulty = String(q.difficulty ?? "").toLowerCase();
+  if (t === "matching") return 4;
+  if (t === "ordering") return 6;
+  if (t === "true_false") return 2;
+  // multiple_choice — หยุดช่องที่สื่อถึงลักษณะของข้อนั้นจริง
+  if ((q.points ?? 0) >= 100) return 3;
+  if (difficulty === "hard") return 1;
+  if (difficulty === "easy") return 0;
+  const roll = Math.random();
+  return roll < 0.34 ? 7 : roll < 0.67 ? 5 : 0;
+}
 
 interface Toast {
   id: number;
@@ -292,6 +319,10 @@ function CoursePlayInner() {
   const [hintLoading, setHintLoading] = useState<number | null>(null);
   const [draggingOrder, setDraggingOrder] = useState<{ qid: number; itemIndex: number } | null>(null);
 
+  // Wheel mode — idle = แสดงวงล้อ · spinning = หมุนอยู่ · question = เปิดการ์ดคำถามที่หยุดได้
+  const [wheelPhase, setWheelPhase] = useState<"idle" | "spinning" | "question">("question");
+  const [wheelSpin, setWheelSpin] = useState<{ landingIndex: number; questionId: number } | null>(null);
+
   useEffect(() => {
     if (!draggingOrder) return;
     const stop = () => setDraggingOrder(null);
@@ -423,6 +454,7 @@ function CoursePlayInner() {
   const hasCombat = modes.includes("turn_based");
   const hasBase = modes.includes("base_building");
   const hasRpg = modes.includes("rpg_lore");
+  const hasWheel = modes.includes("wheel");
 
   // refs สำหรับ combat (อ่านค่าล่าสุดใน async callback ได้)
   const enemyHpRef = useRef(0);
@@ -487,6 +519,10 @@ function CoursePlayInner() {
     setCheckpoint(null);
     setScreen("chapter");
 
+    // Wheel mode: เข้าบทวงล้อ (ไม่ได้มาจากห้องดันเจี้ยน) → เริ่มที่วงล้อ ไม่ใช่การ์ดคำถามเรียงลำดับ
+    setWheelSpin(null);
+    setWheelPhase(hasWheel && !opts.classic ? "idle" : "question");
+
     // เริ่มที่ข้อแรกที่ยังไม่ได้ตอบ (resume กลาง chapter ได้)
     const firstUn = chapter.quiz_questions.findIndex(
       (qq) => answeredMap[String(qq.id)] === undefined
@@ -528,6 +564,32 @@ function CoursePlayInner() {
     setDungeonQuiz(null);
     if (dungeonChapter) setActiveChapter(dungeonChapter);
     setScreen("dungeon");
+  }
+
+  // ---- Wheel mode: หมุนวงล้อ → เลือกคำถามที่ยังไม่ตอบ → หยุดที่ช่องของข้อนั้น ----
+  function handleSpinWheel() {
+    if (!sessionId || !activeChapter || wheelPhase !== "idle") return;
+    const remaining = activeChapter.quiz_questions.filter(
+      (q) => answeredMap[String(q.id)] === undefined
+    );
+    if (remaining.length === 0) return;
+    const q = remaining[Math.floor(Math.random() * remaining.length)];
+    const landingIndex = wheelWedgeFor(q);
+    setWheelSpin({ landingIndex, questionId: q.id });
+    setWheelPhase("spinning");
+    window.setTimeout(() => {
+      const idx = activeChapter.quiz_questions.findIndex((x) => x.id === q.id);
+      setSelected((prev) => {
+        const next = { ...prev };
+        delete next[q.id];
+        return next;
+      });
+      setQIndex(idx === -1 ? 0 : idx);
+      setWheelPhase("question");
+      requestAnimationFrame(() => {
+        qCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    }, 3300);
   }
 
   async function handleRestart() {
@@ -687,6 +749,14 @@ function CoursePlayInner() {
         delete next[q.id];
         return next;
       });
+    }
+    // Wheel mode: ปิดการ์ดกลับไปที่วงล้อ (ไม่ไล่เรียงข้อถัดไป)
+    if (hasWheel && !dungeonQuiz) {
+      const firstUn = qs.findIndex((qq) => answeredMap[String(qq.id)] === undefined);
+      setQIndex(firstUn === -1 ? qs.length : firstUn);
+      setWheelSpin(null);
+      setWheelPhase("idle");
+      return;
     }
     setQIndex((i) => Math.min(i + 1, qs.length));
     // เลื่อนแค่การ์ดคำถามเข้าจอ — ไม่ดันฉากเกมหลุด (desktop เห็นพร้อมกันอยู่แล้ว)
@@ -1315,6 +1385,11 @@ function CoursePlayInner() {
   const chapterQuestionsAnswered = chapter.quiz_questions.every(
     (q) => results[q.id] || answeredMap[String(q.id)] !== undefined
   );
+  const chapterRemaining = chapter.quiz_questions.filter(
+    (q) => answeredMap[String(q.id)] === undefined
+  ).length;
+  const showWheelPanel =
+    hasWheel && !dungeonQuiz && viewMode === "play" && wheelPhase !== "question" && chapterRemaining > 0;
 
   return (
     <div className={`flex min-h-screen flex-col bg-slate-950 text-slate-100 ${playerHit ? "eq-shake" : ""}`}>
@@ -1473,8 +1548,20 @@ function CoursePlayInner() {
           </div>
         )}
 
+        {/* PLAY MODE (wheel) — วงล้อสุ่มคำถาม */}
+        {showWheelPanel && (
+          <WheelPanel
+            wedges={WHEEL_WEDGES}
+            landingIndex={wheelSpin?.landingIndex ?? null}
+            spinning={wheelPhase === "spinning"}
+            remaining={chapterRemaining}
+            total={chapter.quiz_questions.length}
+            onSpin={handleSpinWheel}
+          />
+        )}
+
         {/* PLAY MODE — การ์ดคำถามทีละใบ */}
-        {viewMode === "play" && qIndex < chapter.quiz_questions.length && (
+        {viewMode === "play" && !showWheelPanel && qIndex < chapter.quiz_questions.length && (
           <div className="mt-5">
             {/* Progress */}
             <div className="mb-4 flex items-center gap-3">
@@ -1851,7 +1938,11 @@ function CoursePlayInner() {
                           onClick={goNextQ}
                           className="w-full rounded-lg bg-gradient-to-r from-indigo-600 to-violet-600 py-2.5 text-sm font-bold text-white shadow-lg shadow-indigo-950/50 transition-all hover:from-indigo-500 hover:to-violet-500 active:scale-[0.99]"
                         >
-                          {isLastQ ? "🏁 เสร็จสิ้นภารกิจของโซนนี้" : "ข้อถัดไป →"}
+                          {isLastQ || (hasWheel && !dungeonQuiz && chapterRemaining <= 1)
+                            ? "🏁 เสร็จสิ้นภารกิจของโซนนี้"
+                            : hasWheel && !dungeonQuiz
+                              ? "🎡 กลับไปหมุนวงล้อ"
+                              : "ข้อถัดไป →"}
                         </button>
                       </>
                     )}

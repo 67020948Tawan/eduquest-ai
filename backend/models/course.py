@@ -23,7 +23,7 @@ class Course(Base):
     difficulty = Column(String, nullable=True)
     
     # 🌟 โหมดเกมที่ครูเลือก
-    game_modes = Column(JSON, default=["quiz"])
+    game_modes = Column(JSON, default=["standard_quiz"])
 
     # 🎨 Visual Style Bible (กฎข้อ #30) — pixel_art | modern_2d | fantasy | scifi
     visual_style = Column(String, default="pixel_art")

@@ -34,6 +34,7 @@ const GAME_MODES = [
   { id: "rpg_lore", title: "📜 RPG Adventure", desc: "โลกผจญภัย + NPC + เควสต์" },
   { id: "turn_based", title: "⚔️ Turn-Based Combat", desc: "ตอบถูก = โจมตี ตอบผิด = โดนตี" },
   { id: "base_building", title: "🏰 Base Building", desc: "สร้างฐาน สะสมทรัพยากร" },
+  { id: "wheel", title: "🎡 วงล้อสุ่มคำถาม", desc: "หมุนวงล้อ ได้ข้อไหนตอบข้อนั้น" },
 ];
 
 const TYPE_STYLE: Record<QuestionType, string> = {

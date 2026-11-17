@@ -28,6 +28,7 @@ const GAME_MODES = [
   { id: "rpg_lore", title: "📜 RPG Adventure", desc: "โลกผจญภัย + NPC + เควสต์" },
   { id: "turn_based", title: "⚔️ Turn-Based Combat", desc: "ตอบถูก = โจมตี ตอบผิด = โดนตี" },
   { id: "base_building", title: "🏰 Base Building", desc: "สร้างฐาน สะสมทรัพยากร" },
+  { id: "wheel", title: "🎡 วงล้อสุ่มคำถาม", desc: "หมุนวงล้อ ได้ข้อไหนตอบข้อนั้น" },
 ];
 
 const LENGTH_OPTIONS: { id: GameLength; title: string; desc: string; chapters: number; qpc: number }[] = [
@@ -472,7 +473,8 @@ export default function CreateCoursePage() {
     );
   }
 
-  const canGenerate = Boolean(sufficiency?.sufficient) || (sufficiency?.level === "borderline");
+  // ปลดลิมิต: ตรวจสอบเนื้อหาเป็นแค่คำแนะนำ — สร้างได้เสมอ ไม่บังคับให้เนื้อหา "พอ" ก่อน
+  const canGenerate = Boolean(sufficiency);
   // ตำแหน่งขั้นตอนปัจจุบันใน checklist (queued = ยังไม่เริ่ม)
   const jobStepIndex = job ? GENERATION_STEPS.findIndex((s) => s.id === job.step) : -1;
   const displayProgress = job?.progress ?? 0;
@@ -805,7 +807,7 @@ export default function CreateCoursePage() {
               disabled
               className="w-full rounded-2xl bg-slate-800 py-4 text-xl font-black tracking-wide text-slate-500 cursor-not-allowed"
             >
-              ❌ ปรับความยาวหรือเพิ่มเนื้อหาก่อน แล้วค่อยสร้าง
+              🔍 ตรวจสอบเนื้อหาก่อน แล้วค่อยสร้าง
             </button>
           )}
         </form>
