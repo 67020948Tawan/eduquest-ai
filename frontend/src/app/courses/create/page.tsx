@@ -28,7 +28,7 @@ const GAME_MODES = [
   { id: "rpg_lore", title: "📜 RPG Adventure", desc: "โลกผจญภัย + NPC + เควสต์" },
   { id: "turn_based", title: "⚔️ Turn-Based Combat", desc: "ตอบถูก = โจมตี ตอบผิด = โดนตี" },
   { id: "base_building", title: "🏰 Base Building", desc: "สร้างฐาน สะสมทรัพยากร" },
-  { id: "wheel", title: "🎡 วงล้อสุ่มคำถาม", desc: "หมุนวงล้อ ได้ข้อไหนตอบข้อนั้น" },
+  { id: "wheel", title: "🎡 วงล้อสุ่มคำถาม", desc: "โหมดเดี่ยว: หมุนวงล้อ ได้ข้อไหนตอบข้อนั้น (ไม่มีฉาก RPG)" },
 ];
 
 const LENGTH_OPTIONS: { id: GameLength; title: string; desc: string; chapters: number; qpc: number }[] = [

@@ -323,6 +323,7 @@ function CoursePlayInner() {
   // Wheel mode — idle = แสดงวงล้อ · spinning = หมุนอยู่ · question = เปิดการ์ดคำถามที่หยุดได้
   const [wheelPhase, setWheelPhase] = useState<"idle" | "spinning" | "question">("question");
   const [wheelSpin, setWheelSpin] = useState<{ landingIndex: number; questionId: number } | null>(null);
+  const [wheelLessonOpen, setWheelLessonOpen] = useState(false);
 
   useEffect(() => {
     if (!draggingOrder) return;
@@ -452,10 +453,11 @@ function CoursePlayInner() {
 
   // ---- Modes ----
   const modes = useMemo(() => data?.game_modes ?? [], [data]);
-  const hasCombat = modes.includes("turn_based");
-  const hasBase = modes.includes("base_building");
-  const hasRpg = modes.includes("rpg_lore");
+  // โหมดวงล้อ = โหมดเดี่ยว: หมุนวงล้อ → ตอบคำถาม → จบบท (ไม่มีฉาก RPG/ดันเจี้ยน/มอนสเตอร์/ฐาน)
   const hasWheel = modes.includes("wheel");
+  const hasCombat = !hasWheel && modes.includes("turn_based");
+  const hasBase = !hasWheel && modes.includes("base_building");
+  const hasRpg = !hasWheel && modes.includes("rpg_lore");
 
   // ปุ่มสลับธีม — guest ไม่มี SiteHeader จึงวางมุมล่างขวาของจอเกมให้ (ผู้สอนกดที่ header ได้)
   const themeToggleNode = isGuest ? (
@@ -507,6 +509,24 @@ function CoursePlayInner() {
     chapter: ChapterView,
     opts: { classic?: boolean; noDialogue?: boolean; play?: boolean } = {}
   ) {
+    // โหมดวงล้อ: เข้าห้องวงล้อตรง ๆ — ไม่มีดันเจี้ยน/บทเรียนเต็ม/บทสนทนา
+    if (hasWheel) {
+      setDungeonChapter(null);
+      setDungeonQuiz(null);
+      setActiveChapter(chapter);
+      setViewMode("play");
+      setSelected({});
+      setCheckpoint(null);
+      setScreen("chapter");
+      setWheelSpin(null);
+      setWheelPhase("idle");
+      const firstUn = chapter.quiz_questions.findIndex(
+        (qq) => answeredMap[String(qq.id)] === undefined
+      );
+      setQIndex(firstUn === -1 ? chapter.quiz_questions.length : firstUn);
+      return;
+    }
+
     // บทที่มีดันเจี้ยน → เข้าหน้าแผนที่ดันเจี้ยนก่อน (ยกเว้นมาจาก "ปราบบอสแล้ว")
     if (!opts.classic && chapter.dungeon) {
       setDungeonChapter(chapter);
@@ -888,6 +908,112 @@ function CoursePlayInner() {
   // SCREEN: WORLD MAP
   // =====================================================================
   if (screen === "map") {
+    // ---- โหมดวงล้อ: หน้าเลือกบทแบบเรียบ ๆ (ไม่มีแผนที่ pixel / RPG) ----
+    if (hasWheel) {
+      return (
+        <div className="flex min-h-screen flex-col bg-slate-950 text-slate-100">
+          {!isGuest && <SiteHeader />}
+
+          {/* Toasts */}
+          <div className="pointer-events-none fixed right-4 top-20 z-[70] space-y-2">
+            {toasts.map((t) => (
+              <div
+                key={t.id}
+                className={`eq-pop rounded-xl border px-4 py-2 text-sm font-semibold shadow-lg backdrop-blur ${
+                  t.ok
+                    ? "border-emerald-600/50 bg-emerald-950/80 text-emerald-200"
+                    : "border-rose-600/50 bg-rose-950/80 text-rose-200"
+                }`}
+              >
+                {t.msg}
+              </div>
+            ))}
+          </div>
+
+          {/* Header — ชื่อคอร์ส + XP + progress */}
+          <div className="border-b border-slate-800/60 bg-slate-900/50">
+            <div className="mx-auto flex max-w-3xl flex-wrap items-center justify-between gap-3 px-6 py-4">
+              <div>
+                <p className="text-xs uppercase tracking-widest text-indigo-400">🎡 Wheel Mode</p>
+                <h1 className="text-xl font-bold sm:text-2xl">{data.course_title}</h1>
+              </div>
+              <div className="rounded-full border border-amber-500/30 bg-amber-950/40 px-4 py-1.5">
+                <span className="font-bold text-amber-400">🔥 XP {xp.toLocaleString()}</span>
+              </div>
+            </div>
+            <div className="mx-auto flex max-w-3xl items-center gap-3 px-6 pb-4 text-xs text-slate-400">
+              <span>Progress</span>
+              <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-slate-800 ring-1 ring-slate-700/60">
+                <div
+                  className="relative h-full rounded-full bg-gradient-to-r from-indigo-500 via-violet-500 to-emerald-500 transition-all duration-700"
+                  style={{ width: `${progressPercent}%` }}
+                >
+                  {progressPercent > 0 && (
+                    <span className="eq-progress-shimmer absolute inset-0 rounded-full" />
+                  )}
+                </div>
+              </div>
+              <span className="font-semibold text-slate-300">{progressPercent}%</span>
+            </div>
+          </div>
+
+          {/* รายการบท — การ์ดเรียบ ๆ */}
+          <main className="mx-auto w-full max-w-3xl flex-1 px-6 py-8">
+            <p className="mb-4 text-sm text-slate-400">
+              เลือกบทเพื่อหมุนวงล้อตอบคำถาม · ตอบให้ครบทุกข้อเพื่อรับ Checkpoint
+            </p>
+            <div className="space-y-3">
+              {data.chapters.map((ch, i) => {
+                const done = completedChapters.includes(ch.chapter_id);
+                const answered = ch.quiz_questions.filter(
+                  (q) => answeredMap[String(q.id)] !== undefined
+                ).length;
+                const total = ch.quiz_questions.length;
+                return (
+                  <button
+                    key={ch.chapter_id}
+                    onClick={() => openChapter(ch)}
+                    className={`flex w-full items-center gap-4 rounded-2xl border p-4 text-left transition hover:border-indigo-500 hover:bg-indigo-950/20 sm:p-5 ${
+                      done
+                        ? "border-emerald-800/50 bg-emerald-950/15"
+                        : "border-slate-800 bg-slate-900/50"
+                    }`}
+                  >
+                    <span
+                      className={`grid h-11 w-11 shrink-0 place-items-center rounded-xl text-lg font-black ${
+                        done
+                          ? "bg-emerald-600 text-white"
+                          : answered > 0
+                            ? "bg-indigo-500 text-white"
+                            : "bg-slate-800 text-slate-300"
+                      }`}
+                    >
+                      {done ? "✓" : i + 1}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-bold">{ch.title}</span>
+                      <span className="text-xs text-slate-500">
+                        ตอบแล้ว {answered}/{total} ข้อ
+                      </span>
+                    </span>
+                    <span
+                      className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-bold ${
+                        done
+                          ? "bg-emerald-950/60 text-emerald-300"
+                          : "bg-indigo-950/60 text-indigo-300"
+                      }`}
+                    >
+                      {done ? "จบแล้ว · เล่นซ้ำ" : answered > 0 ? "เล่นต่อ ▶" : "เริ่มเล่น ▶"}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </main>
+        </div>
+      );
+    }
+
     return (
       <div className="flex min-h-screen flex-col bg-slate-950 text-slate-100">
         {!isGuest && <SiteHeader />}
@@ -1421,10 +1547,10 @@ function CoursePlayInner() {
         <div className="mx-auto flex max-w-7xl items-center gap-2 px-4 py-2 text-sm lg:px-6">
           <button
             onClick={() => (dungeonQuiz ? backToDungeon() : setScreen("map"))}
-            aria-label={dungeonQuiz ? "กลับดันเจี้ยน" : "กลับแผนที่"}
+            aria-label={dungeonQuiz ? "กลับดันเจี้ยน" : hasWheel ? "กลับหน้าเลือกบท" : "กลับแผนที่"}
             className="shrink-0 rounded-lg border border-slate-700 px-2.5 py-1.5 text-slate-300 transition hover:border-indigo-500 hover:text-slate-50"
           >
-            ← <span className="hidden sm:inline">{dungeonQuiz ? "Dungeon" : "Map"}</span>
+            ← <span className="hidden sm:inline">{dungeonQuiz ? "Dungeon" : hasWheel ? "Chapters" : "Map"}</span>
           </button>
           <div className="min-w-0 flex-1">
             <p className="truncate font-bold leading-tight">{chapter.title}</p>
@@ -1469,8 +1595,9 @@ function CoursePlayInner() {
       </div>
 
       <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-5 lg:px-6">
-        <div className="grid items-start gap-5 lg:grid-cols-[440px_minmax(0,1fr)] xl:grid-cols-[560px_minmax(0,1fr)]">
+        <div className={hasWheel ? "mx-auto max-w-3xl" : "grid items-start gap-5 lg:grid-cols-[440px_minmax(0,1fr)] xl:grid-cols-[560px_minmax(0,1fr)]"}>
           {/* ===== LEFT: มุมมองเกม (PC: sticky ค้างซ้าย · มือถือ: อยู่บนสุดย่อขนาด) ===== */}
+          {!hasWheel && (
           <aside className="lg:sticky lg:top-32">
             <div className={`relative overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/50 shadow-xl shadow-slate-950/60 ${enemyShake ? "eq-shake" : ""}`}>
               {hasCombat && viewMode === "play" && !dungeonQuiz ? (
@@ -1519,9 +1646,12 @@ function CoursePlayInner() {
                   : `🎯 ${chapter.lesson?.objective ?? ""}`}
             </p>
           </aside>
+          )}
 
           {/* ===== RIGHT: โฟลว์เรียน/เล่น ===== */}
           <section ref={qCardRef} className="min-w-0 scroll-mt-32">
+            {/* โหมดวงล้อ: ไม่มีแท็บเรียน/ภารกิจ — มีปุ่มพับเนื้อหาบทเรียนแทน */}
+            {!hasWheel && (
             <div className="inline-flex gap-1 rounded-full bg-slate-900 p-1">
           <button
             onClick={() => setViewMode("learn")}
@@ -1540,9 +1670,31 @@ function CoursePlayInner() {
             ⚔️ ภารกิจ ({chapter.quiz_questions.length})
           </button>
         </div>
+            )}
+
+            {/* โหมดวงล้อ: สรุปเนื้อหาบทเรียนแบบพับเก็บ (กดดูได้ ไม่บังวงล้อ) */}
+            {hasWheel && chapter.lesson && (
+              <div className="mb-5 rounded-2xl border border-slate-800 bg-slate-900/50">
+                <button
+                  onClick={() => setWheelLessonOpen((v) => !v)}
+                  className="flex w-full items-center justify-between gap-3 px-5 py-3.5 text-left text-sm font-bold text-indigo-300 transition hover:bg-indigo-950/20"
+                >
+                  <span>📖 เนื้อหาบทเรียน{wheelLessonOpen ? "" : " (กดเพื่อดู)"}</span>
+                  <span className="text-xs">{wheelLessonOpen ? "▲" : "▼"}</span>
+                </button>
+                {wheelLessonOpen && (
+                  <div className="border-t border-slate-800 px-5 py-4">
+                    <p className="font-semibold text-indigo-300">🎯 {chapter.lesson.objective}</p>
+                    <div className="mt-3 whitespace-pre-line leading-relaxed text-slate-300">
+                      {chapter.lesson.content}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
         {/* LEARN MODE */}
-        {viewMode === "learn" && chapter.lesson && (
+        {viewMode === "learn" && chapter.lesson && !hasWheel && (
           <div className="mt-6 animate-in fade-in slide-in-from-bottom-2 rounded-2xl border border-slate-800 bg-slate-900/50 p-6 duration-300">
             <p className="font-semibold text-indigo-300">🎯 {chapter.lesson.objective}</p>
             <div className="mt-4 whitespace-pre-line leading-relaxed text-slate-300">{chapter.lesson.content}</div>
@@ -1946,7 +2098,9 @@ function CoursePlayInner() {
                           className="w-full rounded-lg bg-gradient-to-r from-indigo-600 to-violet-600 py-2.5 text-sm font-bold text-white shadow-lg shadow-indigo-950/50 transition-all hover:from-indigo-500 hover:to-violet-500 active:scale-[0.99]"
                         >
                           {isLastQ || (hasWheel && !dungeonQuiz && chapterRemaining <= 1)
-                            ? "🏁 เสร็จสิ้นภารกิจของโซนนี้"
+                            ? hasWheel && !dungeonQuiz
+                              ? "🏁 ตอบครบบทนี้แล้ว"
+                              : "🏁 เสร็จสิ้นภารกิจของโซนนี้"
                             : hasWheel && !dungeonQuiz
                               ? "🎡 กลับไปหมุนวงล้อ"
                               : "ข้อถัดไป →"}
@@ -1999,7 +2153,7 @@ function CoursePlayInner() {
                   onClick={() => setScreen("map")}
                   className="mt-5 rounded-xl bg-emerald-600 px-8 py-3 font-bold transition hover:bg-emerald-500"
                 >
-                  🗺️ กลับแผนที่
+                  {hasWheel ? "🎡 กลับหน้าเลือกบท" : "🗺️ กลับแผนที่"}
                 </button>
               </div>
             )}
